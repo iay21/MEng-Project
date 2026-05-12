@@ -654,3 +654,207 @@ def analyse_calibration_file(
     }])
 
     return results_df
+
+
+def analyse_calibration_file(
+    file,
+    target_force=None
+):
+
+    import os
+    import pandas as pd
+    import numpy as np
+
+    # =====================================================
+    # READ TARGET FORCE FROM METADATA
+    # =====================================================
+
+    if target_force is None:
+
+        with open(file, "r") as f:
+
+            for line in f:
+
+                if "# Target Force (N)" in line:
+
+                    parts = line.strip().split(",")
+
+                    if len(parts) >= 2:
+
+                        try:
+                            target_force = float(parts[1])
+
+                        except:
+                            pass
+
+                if line.startswith("time_s"):
+                    break
+
+    if target_force is None:
+
+        raise ValueError(
+            f"No target force found in:\n{file}"
+        )
+
+    # =====================================================
+    # FIND START OF DATA
+    # =====================================================
+
+    data_start = 0
+
+    with open(file, "r") as f:
+
+        for i, line in enumerate(f):
+
+            line = line.strip()
+
+            if not line:
+                continue
+
+            if line.startswith("#"):
+                continue
+
+            if "time" in line.lower():
+                continue
+
+            data_start = i
+            break
+
+    # =====================================================
+    # LOAD DATA
+    # =====================================================
+
+    df = pd.read_csv(
+        file,
+        sep=r"[\s,\t]+",
+        engine="python",
+        skiprows=data_start,
+        header=None
+    )
+
+    df = df.iloc[:, :2]
+
+    df.columns = ["time", "force"]
+
+    df["time"] = pd.to_numeric(
+        df["time"],
+        errors="coerce"
+    )
+
+    df["force"] = pd.to_numeric(
+        df["force"],
+        errors="coerce"
+    )
+
+    df = df.dropna()
+
+    # =====================================================
+    # FIND STEADY REGION
+    # =====================================================
+
+    steady_region = df[
+        df["force"] > (0.9 * target_force)
+    ]
+
+    if len(steady_region) < 5:
+        steady_region = df.tail(20)
+
+    # =====================================================
+    # METRICS
+    # =====================================================
+
+    max_force = df["force"].max()
+
+    steady_force = steady_region["force"].mean()
+
+    steady_std = steady_region["force"].std()
+
+    absolute_error = abs(
+        steady_force - target_force
+    )
+
+    percentage_error = (
+        absolute_error / target_force
+    ) * 100
+
+    rms_error = np.sqrt(
+        np.mean(
+            (steady_region["force"] - target_force) ** 2
+        )
+    )
+
+    overshoot = max_force - target_force
+
+    # =====================================================
+    # RISE TIME
+    # =====================================================
+
+    force_10 = 0.1 * target_force
+    force_90 = 0.9 * target_force
+
+    try:
+
+        t10 = df[
+            df["force"] >= force_10
+        ]["time"].iloc[0]
+
+        t90 = df[
+            df["force"] >= force_90
+        ]["time"].iloc[0]
+
+        rise_time = t90 - t10
+
+    except:
+        rise_time = np.nan
+
+    # =====================================================
+    # SETTLING TIME
+    # ±5% band
+    # =====================================================
+
+    lower = 0.95 * target_force
+    upper = 1.05 * target_force
+
+    settling_time = np.nan
+
+    for i in range(len(df)):
+
+        remaining = df.iloc[i:]
+
+        if (
+            (remaining["force"] >= lower) &
+            (remaining["force"] <= upper)
+        ).all():
+
+            settling_time = remaining["time"].iloc[0]
+            break
+
+    # =====================================================
+    # OUTPUT TABLE
+    # =====================================================
+
+    results_df = pd.DataFrame([{
+
+        "target_force_N": target_force,
+
+        "max_force_N": max_force,
+
+        "steady_force_N": steady_force,
+
+        "absolute_error_N": absolute_error,
+
+        "percentage_error": percentage_error,
+
+        "steady_force_std_N": steady_std,
+
+        "rms_error_N": rms_error,
+
+        "overshoot_N": overshoot,
+
+        "rise_time_s": rise_time,
+
+        "settling_time_s": settling_time
+
+    }])
+
+    return results_df
