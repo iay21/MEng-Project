@@ -655,206 +655,85 @@ def analyse_calibration_file(
 
     return results_df
 
-
-def analyse_calibration_file(
-    file,
-    target_force=None
+def analyse_calibration_folder_to_excel(
+    folder_path
 ):
 
     import os
     import pandas as pd
-    import numpy as np
 
-    # =====================================================
-    # READ TARGET FORCE FROM METADATA
-    # =====================================================
-
-    if target_force is None:
-
-        with open(file, "r") as f:
-
-            for line in f:
-
-                if "# Target Force (N)" in line:
-
-                    parts = line.strip().split(",")
-
-                    if len(parts) >= 2:
-
-                        try:
-                            target_force = float(parts[1])
-
-                        except:
-                            pass
-
-                if line.startswith("time_s"):
-                    break
-
-    if target_force is None:
-
-        raise ValueError(
-            f"No target force found in:\n{file}"
-        )
-
-    # =====================================================
-    # FIND START OF DATA
-    # =====================================================
-
-    data_start = 0
-
-    with open(file, "r") as f:
-
-        for i, line in enumerate(f):
-
-            line = line.strip()
-
-            if not line:
-                continue
-
-            if line.startswith("#"):
-                continue
-
-            if "time" in line.lower():
-                continue
-
-            data_start = i
-            break
-
-    # =====================================================
-    # LOAD DATA
-    # =====================================================
-
-    df = pd.read_csv(
-        file,
-        sep=r"[\s,\t]+",
-        engine="python",
-        skiprows=data_start,
-        header=None
-    )
-
-    df = df.iloc[:, :2]
-
-    df.columns = ["time", "force"]
-
-    df["time"] = pd.to_numeric(
-        df["time"],
-        errors="coerce"
-    )
-
-    df["force"] = pd.to_numeric(
-        df["force"],
-        errors="coerce"
-    )
-
-    df = df.dropna()
-
-    # =====================================================
-    # FIND STEADY REGION
-    # =====================================================
-
-    steady_region = df[
-        df["force"] > (0.9 * target_force)
-    ]
-
-    if len(steady_region) < 5:
-        steady_region = df.tail(20)
-
-    # =====================================================
-    # METRICS
-    # =====================================================
-
-    max_force = df["force"].max()
-
-    steady_force = steady_region["force"].mean()
-
-    steady_std = steady_region["force"].std()
-
-    absolute_error = abs(
-        steady_force - target_force
-    )
-
-    percentage_error = (
-        absolute_error / target_force
-    ) * 100
-
-    rms_error = np.sqrt(
-        np.mean(
-            (steady_region["force"] - target_force) ** 2
-        )
-    )
-
-    overshoot = max_force - target_force
-
-    # =====================================================
-    # RISE TIME
-    # =====================================================
-
-    force_10 = 0.1 * target_force
-    force_90 = 0.9 * target_force
-
-    try:
-
-        t10 = df[
-            df["force"] >= force_10
-        ]["time"].iloc[0]
-
-        t90 = df[
-            df["force"] >= force_90
-        ]["time"].iloc[0]
-
-        rise_time = t90 - t10
-
-    except:
-        rise_time = np.nan
-
-    # =====================================================
-    # SETTLING TIME
-    # ±5% band
-    # =====================================================
-
-    lower = 0.95 * target_force
-    upper = 1.05 * target_force
-
-    settling_time = np.nan
-
-    for i in range(len(df)):
-
-        remaining = df.iloc[i:]
-
+    csv_files = sorted([
+        f for f in os.listdir(folder_path)
         if (
-            (remaining["force"] >= lower) &
-            (remaining["force"] <= upper)
-        ).all():
+            f.endswith(".csv")
+            and "_analysis" not in f
+        )
+    ])
 
-            settling_time = remaining["time"].iloc[0]
-            break
+    if len(csv_files) == 0:
+        raise ValueError("No CSV files found.")
 
-    # =====================================================
-    # OUTPUT TABLE
-    # =====================================================
+    output_excel = os.path.join(
+        folder_path,
+        "calibration_analysis.xlsx"
+    )
 
-    results_df = pd.DataFrame([{
+    force_counts = {}
 
-        "target_force_N": target_force,
+    with pd.ExcelWriter(
+        output_excel,
+        engine="openpyxl"
+    ) as writer:
 
-        "max_force_N": max_force,
+        for file in csv_files:
 
-        "steady_force_N": steady_force,
+            full_path = os.path.join(
+                folder_path,
+                file
+            )
 
-        "absolute_error_N": absolute_error,
+            # =============================================
+            # RUN ANALYSIS
+            # =============================================
 
-        "percentage_error": percentage_error,
+            results_df = analyse_calibration_file(
+                full_path
+            )
 
-        "steady_force_std_N": steady_std,
+            target_force = results_df[
+                "target_force_N"
+            ].iloc[0]
 
-        "rms_error_N": rms_error,
+            # =============================================
+            # SHEET NAME
+            # =============================================
 
-        "overshoot_N": overshoot,
+            if target_force not in force_counts:
+                force_counts[target_force] = 1
+            else:
+                force_counts[target_force] += 1
 
-        "rise_time_s": rise_time,
+            repetition = force_counts[target_force]
 
-        "settling_time_s": settling_time
+            sheet_name = (
+                f"{target_force}N {repetition}"
+            )
 
-    }])
+            sheet_name = sheet_name[:31]
 
-    return results_df
+            # =============================================
+            # WRITE SHEET
+            # =============================================
+
+            results_df.to_excel(
+                writer,
+                sheet_name=sheet_name,
+                index=False
+            )
+
+    print(
+        f"\nSaved calibration workbook:\n"
+        f"{output_excel}"
+    )
+
+    return output_excel
