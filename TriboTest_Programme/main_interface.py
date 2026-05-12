@@ -1,7 +1,7 @@
-
 import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import simpledialog
+from tkinter import filedialog
 import threading
 import sys
 import os
@@ -406,6 +406,51 @@ tk.Label(
 # BUTTONS
 # =====================================================
 
+save_dir_var = tk.StringVar(value=Testing_functions.SAVE_DIR)
+
+folder_frame = tk.LabelFrame(
+    controls_frame,
+    text="Data Save Folder",
+    padx=10,
+    pady=10
+)
+folder_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+folder_label = tk.Label(
+    folder_frame,
+    textvariable=save_dir_var,
+    anchor="w",
+    justify="left",
+    wraplength=380
+)
+folder_label.pack(fill="x", pady=(0, 5))
+
+
+def choose_save_folder():
+    initial_dir = save_dir_var.get()
+    if not os.path.isdir(initial_dir):
+        initial_dir = os.path.expanduser("~")
+
+    folder = filedialog.askdirectory(
+        parent=root,
+        title="Select Folder to Save Data",
+        initialdir=initial_dir
+    )
+
+    if folder:
+        Testing_functions.SAVE_DIR = folder
+        save_dir_var.set(folder)
+        print(f"Save folder set to: {folder}")
+
+
+tk.Button(
+    folder_frame,
+    text="Choose Save Folder",
+    command=choose_save_folder,
+    width=38,
+    height=2
+).pack()
+
 button_frame = tk.LabelFrame(
     controls_frame,
     text="Functions",
@@ -751,8 +796,6 @@ vars_list = [
     "no_slide_cycles",
     "contact_force",
     "contact_frequency",
-    "contact_time",
-    "separation_time",
     "separation_height",
     "safe_force_limit",
     "touch_threshold",
