@@ -86,6 +86,7 @@ def process_folder():
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
+
 def analyse_force_folder():
 
     folder_path = filedialog.askdirectory(
@@ -97,25 +98,15 @@ def analyse_force_folder():
 
     try:
 
-        import os
-
-        csv_files = [
-            f for f in os.listdir(folder_path)
-            if f.endswith(".csv")
-        ]
-
-        for file in csv_files:
-
-            full_path = os.path.join(folder_path, file)
-
-            Processing_functions.analyse_force_cycles(
-                full_path,
-                target_force=None  # Will read from metadata
+        output_file = (
+            Processing_functions.analyse_force_folder_to_excel(
+                folder_path
             )
+        )
 
         messagebox.showinfo(
             "Success",
-            f"Processed {len(csv_files)} files!"
+            f"Combined Excel file created:\n\n{output_file}"
         )
 
     except Exception as e:
@@ -125,13 +116,48 @@ def analyse_force_folder():
             str(e)
         )
 
+
+def analyse_calibration_folder():
+
+    folder_path = filedialog.askdirectory(
+        title="Select calibration folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        output_file = (
+            Processing_functions
+            .analyse_calibration_folder_to_excel(
+                folder_path
+            )
+        )
+
+        messagebox.showinfo(
+            "Success",
+            f"Calibration analysis saved:\n\n"
+            f"{output_file}"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+
+
+
 # =========================
 # GUI LAYOUT
 # =========================
 
 root = tk.Tk()
 root.title("Triboelectric Data Processor")
-root.geometry("450x350")
+root.geometry("450x400")
 
 tk.Label(
     root,
@@ -155,24 +181,22 @@ tk.Button(
     command=process_folder
 ).pack(pady=10)
 
-force_button = tk.Button(
-    root,
-    text="Analyse Force File",
-    command=analyse_force_file,
-    width=25,
-    height=2
-)
-
-force_button.pack(pady=5)
-
-force_folder_button = tk.Button(
+tk.Button(
     root,
     text="Analyse Force Folder",
-    command=analyse_force_folder,
     width=25,
-    height=2
-)
+    height=2,
+    command=analyse_force_folder
+).pack(pady=10)
 
-force_folder_button.pack(pady=5)
+tk.Button(
+    root,
+    text="Analyse Calibration Folder",
+    width=25,
+    height=2,
+    command=analyse_calibration_folder
+).pack(pady=10)
+
+
 
 root.mainloop()

@@ -308,30 +308,349 @@ def analyse_force_cycles(file, target_force=None):
 
     results_df = pd.DataFrame(results)
 
+
     # =====================================================
-    # SAVE RESULTS
+    # OPTIONAL SAVE RESULTS
     # =====================================================
 
-    parent_folder = os.path.dirname(file)
+    if save_csv:
 
-    analysed_folder = os.path.join(
-        parent_folder,
-        "analysed"
+        parent_folder = os.path.dirname(file)
+
+        analysed_folder = os.path.join(
+            parent_folder,
+            "analysed"
+        )
+
+        os.makedirs(analysed_folder, exist_ok=True)
+
+        base_name = os.path.basename(file)
+
+        name_no_ext = os.path.splitext(base_name)[0]
+
+        output_file = os.path.join(
+            analysed_folder,
+            f"{name_no_ext}_force_analysis.csv"
+        )
+
+        results_df.to_csv(output_file, index=False)
+
+        print(f"Saved:\n{output_file}")
+
+    return results_df
+
+
+def analyse_force_folder_to_excel(folder_path):
+
+    import os
+    import pandas as pd
+
+    # =====================================================
+    # FIND CSV FILES
+    # =====================================================
+
+    csv_files = sorted([
+        f for f in os.listdir(folder_path)
+        if (
+            f.endswith(".csv")
+            and "_force_analysis" not in f
+            and "_analysed" not in f
+        )
+    ])
+
+    if len(csv_files) == 0:
+        raise ValueError("No CSV files found.")
+
+    # =====================================================
+    # CREATE OUTPUT EXCEL FILE
+    # =====================================================
+
+    output_excel = os.path.join(
+        folder_path,
+        "combined_force_analysis.xlsx"
     )
 
-    os.makedirs(analysed_folder, exist_ok=True)
+    # Track repetitions for each force
+    force_counts = {}
 
-    base_name = os.path.basename(file)
+    # =====================================================
+    # WRITE MULTI-SHEET EXCEL FILE
+    # =====================================================
 
-    name_no_ext = os.path.splitext(base_name)[0]
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
 
-    output_file = os.path.join(
-        analysed_folder,
-        f"{name_no_ext}_force_analysis.csv"
+        for file in csv_files:
+
+            full_path = os.path.join(folder_path, file)
+
+            # =============================================
+            # RUN ANALYSIS
+            # =============================================
+
+            results_df = analyse_force_cycles(
+                full_path,
+                target_force=None,
+                save_csv=False
+            )
+
+            # =============================================
+            # READ TARGET FORCE
+            # =============================================
+
+            target_force = None
+
+            with open(full_path, "r") as f:
+
+                for line in f:
+
+                    if "# Target Force (N)" in line:
+
+                        parts = line.strip().split(",")
+
+                        if len(parts) >= 2:
+
+                            try:
+                                target_force = float(parts[1])
+                            except:
+                                pass
+
+                    if line.startswith("time_s"):
+                        break
+
+            # fallback name
+            if target_force is None:
+                target_force = "Unknown"
+
+            # =============================================
+            # CREATE SHEET NAME
+            # =============================================
+
+            if target_force not in force_counts:
+                force_counts[target_force] = 1
+            else:
+                force_counts[target_force] += 1
+
+            repetition = force_counts[target_force]
+
+            sheet_name = f"{target_force}N {repetition}"
+
+            # Excel sheet name limit
+            sheet_name = sheet_name[:31]
+
+            # =============================================
+            # WRITE SHEET
+            # =============================================
+
+            results_df.to_excel(
+                writer,
+                sheet_name=sheet_name,
+                index=False
+            )
+
+    print(f"\nSaved combined Excel file:\n{output_excel}")
+
+    return output_excel
+
+
+def analyse_calibration_file(
+    file,
+    target_force=None
+):
+
+    import os
+    import pandas as pd
+    import numpy as np
+
+    # =====================================================
+    # READ TARGET FORCE FROM METADATA
+    # =====================================================
+
+    if target_force is None:
+
+        with open(file, "r") as f:
+
+            for line in f:
+
+                if "# Target Force (N)" in line:
+
+                    parts = line.strip().split(",")
+
+                    if len(parts) >= 2:
+
+                        try:
+                            target_force = float(parts[1])
+
+                        except:
+                            pass
+
+                if line.startswith("time_s"):
+                    break
+
+    if target_force is None:
+
+        raise ValueError(
+            f"No target force found in:\n{file}"
+        )
+
+    # =====================================================
+    # FIND START OF DATA
+    # =====================================================
+
+    data_start = 0
+
+    with open(file, "r") as f:
+
+        for i, line in enumerate(f):
+
+            line = line.strip()
+
+            if not line:
+                continue
+
+            if line.startswith("#"):
+                continue
+
+            if "time" in line.lower():
+                continue
+
+            data_start = i
+            break
+
+    # =====================================================
+    # LOAD DATA
+    # =====================================================
+
+    df = pd.read_csv(
+        file,
+        sep=r"[\s,\t]+",
+        engine="python",
+        skiprows=data_start,
+        header=None
     )
 
-    results_df.to_csv(output_file, index=False)
+    df = df.iloc[:, :2]
 
-    print(f"Saved:\n{output_file}")
+    df.columns = ["time", "force"]
+
+    df["time"] = pd.to_numeric(
+        df["time"],
+        errors="coerce"
+    )
+
+    df["force"] = pd.to_numeric(
+        df["force"],
+        errors="coerce"
+    )
+
+    df = df.dropna()
+
+    # =====================================================
+    # FIND STEADY REGION
+    # =====================================================
+
+    steady_region = df[
+        df["force"] > (0.9 * target_force)
+    ]
+
+    if len(steady_region) < 5:
+        steady_region = df.tail(20)
+
+    # =====================================================
+    # METRICS
+    # =====================================================
+
+    max_force = df["force"].max()
+
+    steady_force = steady_region["force"].mean()
+
+    steady_std = steady_region["force"].std()
+
+    absolute_error = abs(
+        steady_force - target_force
+    )
+
+    percentage_error = (
+        absolute_error / target_force
+    ) * 100
+
+    rms_error = np.sqrt(
+        np.mean(
+            (steady_region["force"] - target_force) ** 2
+        )
+    )
+
+    overshoot = max_force - target_force
+
+    # =====================================================
+    # RISE TIME
+    # =====================================================
+
+    force_10 = 0.1 * target_force
+    force_90 = 0.9 * target_force
+
+    try:
+
+        t10 = df[
+            df["force"] >= force_10
+        ]["time"].iloc[0]
+
+        t90 = df[
+            df["force"] >= force_90
+        ]["time"].iloc[0]
+
+        rise_time = t90 - t10
+
+    except:
+        rise_time = np.nan
+
+    # =====================================================
+    # SETTLING TIME
+    # ±5% band
+    # =====================================================
+
+    lower = 0.95 * target_force
+    upper = 1.05 * target_force
+
+    settling_time = np.nan
+
+    for i in range(len(df)):
+
+        remaining = df.iloc[i:]
+
+        if (
+            (remaining["force"] >= lower) &
+            (remaining["force"] <= upper)
+        ).all():
+
+            settling_time = remaining["time"].iloc[0]
+            break
+
+    # =====================================================
+    # OUTPUT TABLE
+    # =====================================================
+
+    results_df = pd.DataFrame([{
+
+        "target_force_N": target_force,
+
+        "max_force_N": max_force,
+
+        "steady_force_N": steady_force,
+
+        "absolute_error_N": absolute_error,
+
+        "percentage_error": percentage_error,
+
+        "steady_force_std_N": steady_std,
+
+        "rms_error_N": rms_error,
+
+        "overshoot_N": overshoot,
+
+        "rise_time_s": rise_time,
+
+        "settling_time_s": settling_time
+
+    }])
 
     return results_df
