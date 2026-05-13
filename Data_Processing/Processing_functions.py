@@ -309,34 +309,6 @@ def analyse_force_cycles(file, target_force=None):
     results_df = pd.DataFrame(results)
 
 
-    # =====================================================
-    # OPTIONAL SAVE RESULTS
-    # =====================================================
-
-    if save_csv:
-
-        parent_folder = os.path.dirname(file)
-
-        analysed_folder = os.path.join(
-            parent_folder,
-            "analysed"
-        )
-
-        os.makedirs(analysed_folder, exist_ok=True)
-
-        base_name = os.path.basename(file)
-
-        name_no_ext = os.path.splitext(base_name)[0]
-
-        output_file = os.path.join(
-            analysed_folder,
-            f"{name_no_ext}_force_analysis.csv"
-        )
-
-        results_df.to_csv(output_file, index=False)
-
-        print(f"Saved:\n{output_file}")
-
     return results_df
 
 
@@ -344,113 +316,459 @@ def analyse_force_folder_to_excel(folder_path):
 
     import os
     import pandas as pd
+    import numpy as np
+    from collections import defaultdict
 
     # =====================================================
-    # FIND CSV FILES
+    # COLLECT FILES
     # =====================================================
 
-    csv_files = sorted([
+    csv_files = [
         f for f in os.listdir(folder_path)
-        if (
-            f.endswith(".csv")
-            and "_force_analysis" not in f
-            and "_analysed" not in f
-        )
-    ])
+        if f.endswith(".csv")
+        and "_force_analysis" not in f
+        and "_analysed" not in f
+    ]
 
     if len(csv_files) == 0:
         raise ValueError("No CSV files found.")
 
     # =====================================================
-    # CREATE OUTPUT EXCEL FILE
+    # STORAGE
     # =====================================================
 
-    output_excel = os.path.join(
-        folder_path,
-        "combined_force_analysis.xlsx"
-    )
+    run_rows = []
+    force_summary_temp = []
 
-    # Track repetitions for each force
-    force_counts = {}
+    force_counter = defaultdict(int)
 
     # =====================================================
-    # WRITE MULTI-SHEET EXCEL FILE
+    # FIRST PASS: PROCESS ALL FILES
     # =====================================================
+
+    for file in csv_files:
+
+        full_path = os.path.join(folder_path, file)
+
+        results_df = analyse_force_cycles(full_path)
+
+        if results_df is None or len(results_df) == 0:
+            continue
+
+        force = float(results_df["target_force_N"].iloc[0])
+        force_int = int(round(force))
+
+        force_counter[force_int] += 1
+        run_id = force_counter[force_int]
+
+        # =================================================
+        # BASIC STATS (per run)
+        # =================================================
+
+        mean_row = results_df.mean(numeric_only=True)
+
+        steady = mean_row.get("steady_force_N", np.nan)
+        freq = mean_row.get("frequency_hz", np.nan)
+
+        abs_err = steady - force if pd.notna(steady) else np.nan
+        pct_err = (abs_err / force * 100) if force else np.nan
+
+        # store run-level data (OVERALL sheet)
+        run_rows.append({
+            "Contact Force": f"{force_int}N ({run_id})",
+            "Mean steady force": steady,
+            "Absolute Force Error": abs_err,
+            "% Force Error": pct_err,
+            "Mean RMS Error on steady force": mean_row.get("rms_error_N", np.nan),
+            "Mean Steady force STD": mean_row.get("steady_force_std_N", np.nan),
+            "Mean Frequency": freq,
+            "Absolute Freq error": np.nan,
+            "% Freq error": np.nan
+        })
+
+        # store for MEAN sheet
+        force_summary_temp.append({
+            "Force": force_int,
+            "steady": steady,
+            "error": abs_err,
+            "pct": pct_err,
+            "rms": mean_row.get("rms_error_N", np.nan),
+            "std": mean_row.get("steady_force_std_N", np.nan),
+            "freq": freq
+        })
+
+        force_counter[force_int] = run_id
+
+    # =====================================================
+    # BUILD OVERALL SHEET
+    # =====================================================
+
+    overall_df = pd.DataFrame(run_rows)
+
+    # force order
+    overall_df["sort"] = overall_df["Contact Force"].str.extract(r"(\d+)").astype(int)
+    overall_df = overall_df.sort_values("sort").drop(columns=["sort"])
+
+    # =====================================================
+    # BUILD MEAN SHEET (YOUR EXACT FORMAT)
+    # =====================================================
+
+    mean_df = pd.DataFrame(force_summary_temp)
+
+    grouped = mean_df.groupby("Force").mean(numeric_only=True).reset_index()
+
+    grouped = grouped.sort_values("Force")
+
+    mean_sheet = pd.DataFrame({
+        "Target Contact Force (N)": grouped["Force"],
+
+        "Steady Force": "",
+        "Mean (N)": grouped["steady"],
+        "Absolute Error": grouped["error"],
+        "% Error": grouped["pct"],
+
+        "Mean RMS Error": grouped["rms"],
+        "Mean STD": grouped["std"],
+
+        "Cycle Frequency": "",
+        "Mean (Hz)": grouped["freq"],
+        "Absolute Freq Error": np.nan,
+        "% Freq Error": np.nan
+    })
+
+    # fix column order EXACTLY as requested
+    mean_sheet = mean_sheet[
+        [
+            "Target Contact Force (N)",
+            "Mean (N)",
+            "Absolute Error",
+            "% Error",
+            "Mean RMS Error",
+            "Mean STD",
+            "Mean (Hz)",
+            "Absolute Freq Error",
+            "% Freq Error"
+        ]
+    ]
+
+    # =====================================================
+    # WRITE EXCEL (ORDER IMPORTANT)
+    # =====================================================
+
+    output_excel = os.path.join(folder_path, "combined_force_analysis.xlsx")
 
     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+
+        # 1. MEAN (FIRST SHEET)
+        mean_sheet.to_excel(writer, sheet_name="MEAN", index=False)
+
+        # 2. OVERALL (SECOND SHEET)
+        overall_df.to_excel(writer, sheet_name="OVERALL", index=False)
+
+        # 3. INDIVIDUAL SHEETS
+        force_counter.clear()
 
         for file in csv_files:
 
             full_path = os.path.join(folder_path, file)
 
-            # =============================================
-            # RUN ANALYSIS
-            # =============================================
+            results_df = analyse_force_cycles(full_path)
 
-            results_df = analyse_force_cycles(
-                full_path,
-                target_force=None,
-                save_csv=False
-            )
+            force = int(round(results_df["target_force_N"].iloc[0]))
 
-            # =============================================
-            # READ TARGET FORCE
-            # =============================================
+            force_counter[force] += 1
+            run_id = force_counter[force]
 
-            target_force = None
+            sheet_name = f"{force}N {run_id}"[:31]
 
-            with open(full_path, "r") as f:
+            results_df["cycle"] = results_df["cycle"].astype(object)
 
-                for line in f:
+            mean_row = results_df.mean(numeric_only=True)
+            mean_row["cycle"] = "MEAN"
 
-                    if "# Target Force (N)" in line:
+            mean_df = pd.DataFrame([mean_row])
+            mean_df = mean_df.reindex(columns=results_df.columns)
 
-                        parts = line.strip().split(",")
+            final_df = pd.concat([results_df, mean_df], ignore_index=True)
 
-                        if len(parts) >= 2:
+            final_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-                            try:
-                                target_force = float(parts[1])
-                            except:
-                                pass
-
-                    if line.startswith("time_s"):
-                        break
-
-            # fallback name
-            if target_force is None:
-                target_force = "Unknown"
-
-            # =============================================
-            # CREATE SHEET NAME
-            # =============================================
-
-            if target_force not in force_counts:
-                force_counts[target_force] = 1
-            else:
-                force_counts[target_force] += 1
-
-            repetition = force_counts[target_force]
-
-            sheet_name = f"{target_force}N {repetition}"
-
-            # Excel sheet name limit
-            sheet_name = sheet_name[:31]
-
-            # =============================================
-            # WRITE SHEET
-            # =============================================
-
-            results_df.to_excel(
-                writer,
-                sheet_name=sheet_name,
-                index=False
-            )
-
-    print(f"\nSaved combined Excel file:\n{output_excel}")
+    print(f"\nSaved:\n{output_excel}")
 
     return output_excel
 
+
+# def analyse_force_folder_to_excel(folder_path):
+
+#     import os
+#     import pandas as pd
+#     import numpy as np
+#     import re
+
+#     # =====================================================
+#     # GET FILES
+#     # =====================================================
+
+#     csv_files = [
+#         f for f in os.listdir(folder_path)
+#         if f.endswith(".csv")
+#         and "_force_analysis" not in f
+#         and "_analysed" not in f
+#     ]
+
+#     if len(csv_files) == 0:
+#         raise ValueError("No CSV files found.")
+
+#     # =====================================================
+#     # SORT FILES BY FORCE THEN REPETITION
+#     # =====================================================
+
+#     def extract_sort_key(filename):
+
+#         # try to extract force + run index from metadata or filename
+#         # fallback = 999
+
+#         full_path = os.path.join(folder_path, filename)
+
+#         target_force = None
+
+#         try:
+#             with open(full_path, "r") as f:
+#                 for line in f:
+#                     if "# Target Force (N)" in line:
+#                         parts = line.strip().split(",")
+#                         if len(parts) >= 2:
+#                             target_force = float(parts[1])
+#                     if line.startswith("time_s"):
+#                         break
+#         except:
+#             pass
+
+#         if target_force is None:
+#             target_force = 999
+
+#         # extract run number from filename if present (1,2,3)
+#         match = re.search(r"(\d+)(?!.*\d)", filename)
+#         run = int(match.group(1)) if match else 999
+
+#         return (target_force, run)
+
+#     csv_files = sorted(csv_files, key=extract_sort_key)
+
+#     # =====================================================
+#     # OUTPUT FILE
+#     # =====================================================
+
+#     output_excel = os.path.join(
+#         folder_path,
+#         "_combined_force_analysis.xlsx"
+#     )
+
+#     force_counts = {}
+
+#     # =====================================================
+#     # WRITE EXCEL
+#     # =====================================================
+
+#     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+
+#         for file in csv_files:
+
+#             full_path = os.path.join(folder_path, file)
+
+#             results_df = analyse_force_cycles(full_path)
+
+#             if results_df is None or len(results_df) == 0:
+#                 continue
+
+#             # =================================================
+#             # GET FORCE
+#             # =================================================
+
+#             target_force = results_df["target_force_N"].iloc[0]
+#             target_force_int = int(round(target_force))
+
+#             # count repetitions per force
+#             force_counts.setdefault(target_force_int, 0)
+#             force_counts[target_force_int] += 1
+
+#             rep = force_counts[target_force_int]
+
+#             # =================================================
+#             # SHEET NAME (NO DECIMALS)
+#             # =================================================
+
+#             sheet_name = f"{target_force_int}N {rep}"
+#             sheet_name = sheet_name[:31]
+
+#             # =================================================
+#             # ADD MEAN ROW
+#             # =================================================
+
+#             mean_row = results_df.mean(numeric_only=True)
+#             mean_row["cycle"] = "MEAN"
+#             mean_df = pd.DataFrame([mean_row])
+
+#             final_df = pd.concat([results_df, mean_df], ignore_index=True)
+
+#             # =================================================
+#             # WRITE SHEET
+#             # =================================================
+
+#             final_df.to_excel(
+#                 writer,
+#                 sheet_name=sheet_name,
+#                 index=False
+#             )
+
+#     print(f"\nSaved combined Excel file:\n{output_excel}")
+
+    return output_excel
+
+
+# def analyse_force_folder_to_excel(folder_path):
+
+#     import os
+#     import pandas as pd
+
+#     # =====================================================
+#     # FIND CSV FILES
+#     # =====================================================
+
+#     csv_files = sorted([
+#         f for f in os.listdir(folder_path)
+#         if (
+#             f.endswith(".csv")
+#             and "_force_analysis" not in f
+#             and "_analysed" not in f
+#         )
+#     ])
+
+#     if len(csv_files) == 0:
+#         raise ValueError("No CSV files found.")
+
+#     # =====================================================
+#     # CREATE OUTPUT EXCEL FILE
+#     # =====================================================
+
+#     output_excel = os.path.join(
+#         folder_path,
+#         "_combined_force_analysis.xlsx"
+#     )
+
+#     force_counts = {}
+#     summary_rows = []
+
+#     wrote_any_sheet = False  # ✅ important safety flag
+
+#     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+
+#         # =====================================================
+#         # PROCESS FILES
+#         # =====================================================
+
+#         for file in csv_files:
+
+#             full_path = os.path.join(folder_path, file)
+
+#             try:
+#                 results_df = analyse_force_cycles(
+#                     full_path,
+#                     target_force=None,
+#                 )
+#             except Exception as e:
+#                 print(f"Skipping {file}: {e}")
+#                 continue
+
+#             if results_df is None or len(results_df) == 0:
+#                 print(f"Skipping empty result: {file}")
+#                 continue
+
+#             target_force = results_df["target_force_N"].iloc[0]
+
+#             # =================================================
+#             # SAFE SHEET NAME
+#             # =================================================
+
+#             force_key = float(target_force) if pd.notna(target_force) else 0
+
+#             force_counts.setdefault(force_key, 0)
+#             force_counts[force_key] += 1
+
+#             rep = force_counts[force_key]
+
+#             sheet_name = f"{force_key:.1f}N {rep}"  # FIX: stable formatting
+#             sheet_name = sheet_name.replace(".", "_")  # extra safety
+#             sheet_name = sheet_name[:31]
+
+#             # =================================================
+#             # WRITE MAIN DATA SHEET
+#             # =================================================
+
+#             results_df.to_excel(
+#                 writer,
+#                 sheet_name=sheet_name,
+#                 index=False
+#             )
+
+#             wrote_any_sheet = True
+
+#             # =================================================
+#             # MEAN ROW
+#             # =================================================
+
+#             mean_row = results_df.mean(numeric_only=True)
+
+#             steady = mean_row.get("steady_force_N", np.nan)
+
+#             abs_err = steady - target_force if pd.notna(steady) else np.nan
+#             pct_err = (abs_err / target_force * 100) if target_force else np.nan
+
+#             summary_rows.append({
+#                 "Contact Force": sheet_name,
+#                 "Mean steady force": steady,
+#                 "Absolute Force Error": abs_err,
+#                 "% Force Error": pct_err,
+#                 "Mean RMS Error on steady force": mean_row.get("rms_error_N", np.nan),
+#                 "Mean Steady force STD": mean_row.get("steady_force_std_N", np.nan),
+#                 "Mean Frequency": mean_row.get("frequency_hz", np.nan),
+#                 "Absolute Freq error": np.nan,
+#                 "% Freq error": np.nan
+#             })
+
+#         # =====================================================
+#         # BUILD SUMMARY SHEET
+#         # =====================================================
+
+#         summary_df = pd.DataFrame(summary_rows)
+
+#         if len(summary_df) > 0:
+
+#             summary_df.to_excel(
+#                 writer,
+#                 sheet_name="SUMMARY",
+#                 index=False
+#             )
+
+#             wrote_any_sheet = True
+
+#         # =====================================================
+#         # CRITICAL FIX
+#         # =====================================================
+
+#         if not wrote_any_sheet:
+
+#             # Excel MUST have at least one sheet
+#             pd.DataFrame({"error": ["No valid data processed"]}).to_excel(
+#                 writer,
+#                 sheet_name="EMPTY",
+#                 index=False
+#             )
+
+#     print(f"\nSaved:\n{output_excel}")
+
+#     return output_excel
+    
 
 def analyse_calibration_file(
     file,
@@ -675,7 +993,7 @@ def analyse_calibration_folder_to_excel(
 
     output_excel = os.path.join(
         folder_path,
-        "calibration_analysis.xlsx"
+        "_calibration_analysis.xlsx"
     )
 
     force_counts = {}
@@ -737,3 +1055,4 @@ def analyse_calibration_folder_to_excel(
     )
 
     return output_excel
+    
