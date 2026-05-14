@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import os
 
 FORCE_THRESHOLD = 0.5
 MIN_CYCLE_POINTS = 5
@@ -497,278 +498,299 @@ def analyse_force_folder_to_excel(folder_path):
 
     return output_excel
 
+def force_only_analysis(folder_path):
 
-# def analyse_force_folder_to_excel(folder_path):
+    import os
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
 
-#     import os
-#     import pandas as pd
-#     import numpy as np
-#     import re
+    # =====================================================
+    # STORAGE
+    # =====================================================
 
-#     # =====================================================
-#     # GET FILES
-#     # =====================================================
+    summary_data = []
 
-#     csv_files = [
-#         f for f in os.listdir(folder_path)
-#         if f.endswith(".csv")
-#         and "_force_analysis" not in f
-#         and "_analysed" not in f
-#     ]
+    # =====================================================
+    # FIND CSV FILES
+    # =====================================================
 
-#     if len(csv_files) == 0:
-#         raise ValueError("No CSV files found.")
+    csv_files = sorted([
+        f for f in os.listdir(folder_path)
+        if (
+            f.endswith(".csv")
+            and "_analysis" not in f
+            and "_analysed" not in f
+        )
+    ])
 
-#     # =====================================================
-#     # SORT FILES BY FORCE THEN REPETITION
-#     # =====================================================
+    if len(csv_files) == 0:
+        raise ValueError(
+            "No CSV files found."
+        )
 
-#     def extract_sort_key(filename):
+    # =====================================================
+    # PROCESS FILES
+    # =====================================================
 
-#         # try to extract force + run index from metadata or filename
-#         # fallback = 999
+    for file in csv_files:
 
-#         full_path = os.path.join(folder_path, filename)
+        full_path = os.path.join(
+            folder_path,
+            file
+        )
 
-#         target_force = None
+        try:
 
-#         try:
-#             with open(full_path, "r") as f:
-#                 for line in f:
-#                     if "# Target Force (N)" in line:
-#                         parts = line.strip().split(",")
-#                         if len(parts) >= 2:
-#                             target_force = float(parts[1])
-#                     if line.startswith("time_s"):
-#                         break
-#         except:
-#             pass
+            # =============================================
+            # RUN FORCE ANALYSIS
+            # =============================================
 
-#         if target_force is None:
-#             target_force = 999
+            results_df = analyse_force_cycles(
+                full_path
+            )
 
-#         # extract run number from filename if present (1,2,3)
-#         match = re.search(r"(\d+)(?!.*\d)", filename)
-#         run = int(match.group(1)) if match else 999
+            if len(results_df) == 0:
+                continue
 
-#         return (target_force, run)
+            # =============================================
+            # EXTRACT METRICS
+            # =============================================
 
-#     csv_files = sorted(csv_files, key=extract_sort_key)
+            target_force = int(round(
+                results_df[
+                    "target_force_N"
+                ].iloc[0]
+            ))
 
-#     # =====================================================
-#     # OUTPUT FILE
-#     # =====================================================
+            mean_force = results_df[
+                "steady_force_N"
+            ].mean()
 
-#     output_excel = os.path.join(
-#         folder_path,
-#         "_combined_force_analysis.xlsx"
-#     )
+            abs_error = (
+                mean_force - target_force
+            )
 
-#     force_counts = {}
+            percent_error = (
+                abs_error / target_force
+            ) * 100
 
-#     # =====================================================
-#     # WRITE EXCEL
-#     # =====================================================
+            mean_std = results_df[
+                "steady_force_std_N"
+            ].mean()
 
-#     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+            mean_rms = results_df[
+                "rms_error_N"
+            ].mean()
 
-#         for file in csv_files:
+            summary_data.append({
 
-#             full_path = os.path.join(folder_path, file)
+                "Target Force (N)": target_force,
 
-#             results_df = analyse_force_cycles(full_path)
+                "Mean Force (N)": mean_force,
 
-#             if results_df is None or len(results_df) == 0:
-#                 continue
+                "Absolute Error (N)": abs_error,
 
-#             # =================================================
-#             # GET FORCE
-#             # =================================================
+                "Percent Error (%)": percent_error,
 
-#             target_force = results_df["target_force_N"].iloc[0]
-#             target_force_int = int(round(target_force))
+                "STD (N)": mean_std,
 
-#             # count repetitions per force
-#             force_counts.setdefault(target_force_int, 0)
-#             force_counts[target_force_int] += 1
+                "RMS Error (N)": mean_rms
+            })
 
-#             rep = force_counts[target_force_int]
+        except Exception as e:
 
-#             # =================================================
-#             # SHEET NAME (NO DECIMALS)
-#             # =================================================
+            print(f"Failed: {file}")
+            print(e)
 
-#             sheet_name = f"{target_force_int}N {rep}"
-#             sheet_name = sheet_name[:31]
+    # =====================================================
+    # CREATE DATAFRAME
+    # =====================================================
 
-#             # =================================================
-#             # ADD MEAN ROW
-#             # =================================================
+    results_df = pd.DataFrame(
+        summary_data
+    )
 
-#             mean_row = results_df.mean(numeric_only=True)
-#             mean_row["cycle"] = "MEAN"
-#             mean_df = pd.DataFrame([mean_row])
+    if len(results_df) == 0:
+        raise ValueError(
+            "No valid data processed."
+        )
 
-#             final_df = pd.concat([results_df, mean_df], ignore_index=True)
+    # =====================================================
+    # GROUP REPEATS
+    # =====================================================
 
-#             # =================================================
-#             # WRITE SHEET
-#             # =================================================
+    grouped_df = results_df.groupby(
+        "Target Force (N)"
+    ).agg({
 
-#             final_df.to_excel(
-#                 writer,
-#                 sheet_name=sheet_name,
-#                 index=False
-#             )
+        "Mean Force (N)": "mean",
 
-#     print(f"\nSaved combined Excel file:\n{output_excel}")
+        "Absolute Error (N)": "mean",
+
+        "Percent Error (%)": "mean",
+
+        "STD (N)": "mean",
+
+        "RMS Error (N)": "mean"
+
+    }).reset_index()
+
+    grouped_df = grouped_df.sort_values(
+        "Target Force (N)"
+    )
+
+    # =====================================================
+    # SAVE EXCEL
+    # =====================================================
+
+    output_excel = os.path.join(
+        folder_path,
+        "FORCE_ONLY_ANALYSIS.xlsx"
+    )
+
+    with pd.ExcelWriter(
+        output_excel,
+        engine="openpyxl"
+    ) as writer:
+
+        results_df.to_excel(
+            writer,
+            sheet_name="ALL_RESULTS",
+            index=False
+        )
+
+        grouped_df.to_excel(
+            writer,
+            sheet_name="SUMMARY",
+            index=False
+        )
+
+    # =====================================================
+    # PLOTS
+    # =====================================================
+
+    # -----------------------------------------------------
+    # TARGET VS MEAN FORCE
+    # -----------------------------------------------------
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(
+        grouped_df["Target Force (N)"],
+        grouped_df["Mean Force (N)"],
+        marker="o"
+    )
+
+    plt.plot(
+        grouped_df["Target Force (N)"],
+        grouped_df["Target Force (N)"],
+        linestyle="--"
+    )
+
+    plt.xlabel("Target Force (N)")
+    plt.ylabel("Measured Force (N)")
+    plt.title("Target vs Measured Force")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "Target_vs_Measured_Force.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    # -----------------------------------------------------
+    # PERCENT ERROR
+    # -----------------------------------------------------
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(
+        grouped_df["Target Force (N)"],
+        grouped_df["Percent Error (%)"],
+        marker="o"
+    )
+
+    plt.xlabel("Target Force (N)")
+    plt.ylabel("Percent Error (%)")
+    plt.title("Percent Error")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "Percent_Error.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    # -----------------------------------------------------
+    # STD
+    # -----------------------------------------------------
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(
+        grouped_df["Target Force (N)"],
+        grouped_df["STD (N)"],
+        marker="o"
+    )
+
+    plt.xlabel("Target Force (N)")
+    plt.ylabel("STD (N)")
+    plt.title("Force Stability")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "Force_STD.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    # -----------------------------------------------------
+    # RMS ERROR
+    # -----------------------------------------------------
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(
+        grouped_df["Target Force (N)"],
+        grouped_df["RMS Error (N)"],
+        marker="o"
+    )
+
+    plt.xlabel("Target Force (N)")
+    plt.ylabel("RMS Error (N)")
+    plt.title("RMS Force Error")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "RMS_Error.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    print(f"Saved analysis:\n{output_excel}")
 
     return output_excel
-
-
-# def analyse_force_folder_to_excel(folder_path):
-
-#     import os
-#     import pandas as pd
-
-#     # =====================================================
-#     # FIND CSV FILES
-#     # =====================================================
-
-#     csv_files = sorted([
-#         f for f in os.listdir(folder_path)
-#         if (
-#             f.endswith(".csv")
-#             and "_force_analysis" not in f
-#             and "_analysed" not in f
-#         )
-#     ])
-
-#     if len(csv_files) == 0:
-#         raise ValueError("No CSV files found.")
-
-#     # =====================================================
-#     # CREATE OUTPUT EXCEL FILE
-#     # =====================================================
-
-#     output_excel = os.path.join(
-#         folder_path,
-#         "_combined_force_analysis.xlsx"
-#     )
-
-#     force_counts = {}
-#     summary_rows = []
-
-#     wrote_any_sheet = False  # ✅ important safety flag
-
-#     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
-
-#         # =====================================================
-#         # PROCESS FILES
-#         # =====================================================
-
-#         for file in csv_files:
-
-#             full_path = os.path.join(folder_path, file)
-
-#             try:
-#                 results_df = analyse_force_cycles(
-#                     full_path,
-#                     target_force=None,
-#                 )
-#             except Exception as e:
-#                 print(f"Skipping {file}: {e}")
-#                 continue
-
-#             if results_df is None or len(results_df) == 0:
-#                 print(f"Skipping empty result: {file}")
-#                 continue
-
-#             target_force = results_df["target_force_N"].iloc[0]
-
-#             # =================================================
-#             # SAFE SHEET NAME
-#             # =================================================
-
-#             force_key = float(target_force) if pd.notna(target_force) else 0
-
-#             force_counts.setdefault(force_key, 0)
-#             force_counts[force_key] += 1
-
-#             rep = force_counts[force_key]
-
-#             sheet_name = f"{force_key:.1f}N {rep}"  # FIX: stable formatting
-#             sheet_name = sheet_name.replace(".", "_")  # extra safety
-#             sheet_name = sheet_name[:31]
-
-#             # =================================================
-#             # WRITE MAIN DATA SHEET
-#             # =================================================
-
-#             results_df.to_excel(
-#                 writer,
-#                 sheet_name=sheet_name,
-#                 index=False
-#             )
-
-#             wrote_any_sheet = True
-
-#             # =================================================
-#             # MEAN ROW
-#             # =================================================
-
-#             mean_row = results_df.mean(numeric_only=True)
-
-#             steady = mean_row.get("steady_force_N", np.nan)
-
-#             abs_err = steady - target_force if pd.notna(steady) else np.nan
-#             pct_err = (abs_err / target_force * 100) if target_force else np.nan
-
-#             summary_rows.append({
-#                 "Contact Force": sheet_name,
-#                 "Mean steady force": steady,
-#                 "Absolute Force Error": abs_err,
-#                 "% Force Error": pct_err,
-#                 "Mean RMS Error on steady force": mean_row.get("rms_error_N", np.nan),
-#                 "Mean Steady force STD": mean_row.get("steady_force_std_N", np.nan),
-#                 "Mean Frequency": mean_row.get("frequency_hz", np.nan),
-#                 "Absolute Freq error": np.nan,
-#                 "% Freq error": np.nan
-#             })
-
-#         # =====================================================
-#         # BUILD SUMMARY SHEET
-#         # =====================================================
-
-#         summary_df = pd.DataFrame(summary_rows)
-
-#         if len(summary_df) > 0:
-
-#             summary_df.to_excel(
-#                 writer,
-#                 sheet_name="SUMMARY",
-#                 index=False
-#             )
-
-#             wrote_any_sheet = True
-
-#         # =====================================================
-#         # CRITICAL FIX
-#         # =====================================================
-
-#         if not wrote_any_sheet:
-
-#             # Excel MUST have at least one sheet
-#             pd.DataFrame({"error": ["No valid data processed"]}).to_excel(
-#                 writer,
-#                 sheet_name="EMPTY",
-#                 index=False
-#             )
-
-#     print(f"\nSaved:\n{output_excel}")
-
-#     return output_excel
-    
 
 
 def full_frequency_force_analysis(master_folder):
@@ -1639,23 +1661,20 @@ def create_force_error_heatmap(master_folder):
 
 #     return output_excel
     
-
 def analyse_calibration_folder(folder_path):
 
     import os
     import pandas as pd
     import numpy as np
 
-    FORCE_THRESHOLD = 0.5
-
     # =====================================================
     # STORAGE
     # =====================================================
 
-    all_results = []
+    results = []
 
     # =====================================================
-    # FIND CSV FILES
+    # FIND FILES
     # =====================================================
 
     csv_files = sorted([
@@ -1667,7 +1686,9 @@ def analyse_calibration_folder(folder_path):
     ])
 
     if len(csv_files) == 0:
-        raise ValueError("No CSV files found.")
+        raise ValueError(
+            "No CSV files found."
+        )
 
     # =====================================================
     # PROCESS FILES
@@ -1706,7 +1727,7 @@ def analyse_calibration_folder(folder_path):
             continue
 
         # =================================================
-        # LOAD DATA
+        # FIND START OF DATA
         # =================================================
 
         data_start = 0
@@ -1729,6 +1750,10 @@ def analyse_calibration_folder(folder_path):
                 data_start = i
                 break
 
+        # =================================================
+        # LOAD DATA
+        # =================================================
+
         df = pd.read_csv(
             full_path,
             sep=r"[\s,\t]+",
@@ -1744,11 +1769,6 @@ def analyse_calibration_folder(folder_path):
             "force"
         ]
 
-        df["time"] = pd.to_numeric(
-            df["time"],
-            errors="coerce"
-        )
-
         df["force"] = pd.to_numeric(
             df["force"],
             errors="coerce"
@@ -1760,186 +1780,84 @@ def analyse_calibration_folder(folder_path):
             continue
 
         # =================================================
-        # FIND CONTACT REGION
+        # PEAK FORCE
         # =================================================
 
-        contact_region = df[
-            df["force"] > FORCE_THRESHOLD
-        ]
-
-        if len(contact_region) < 5:
-            continue
-
-        # =================================================
-        # STEADY REGION
-        # =================================================
-
-        max_force = contact_region[
+        peak_force = df[
             "force"
         ].max()
 
-        steady_region = contact_region[
-            contact_region["force"]
-            > (0.8 * max_force)
-        ]
-
-        if len(steady_region) < 3:
-            steady_region = contact_region
-
         # =================================================
-        # METRICS
+        # ERRORS
         # =================================================
 
-        mean_force = steady_region[
-            "force"
-        ].mean()
-
-        abs_error = (
-            mean_force - target_force
+        absolute_error = (
+            peak_force - target_force
         )
 
-        pct_error = (
-            abs_error / target_force
+        percent_error = (
+            absolute_error / target_force
         ) * 100
-
-        std_force = steady_region[
-            "force"
-        ].std()
-
-        rms_error = np.sqrt(
-            np.mean(
-                (
-                    steady_region["force"]
-                    - target_force
-                ) ** 2
-            )
-        )
-
-        overshoot = (
-            (
-                max_force
-                - target_force
-            )
-            / target_force
-        ) * 100
-
-        # =================================================
-        # SETTLING TIME
-        # =================================================
-
-        lower_bound = (
-            0.95 * target_force
-        )
-
-        upper_bound = (
-            1.05 * target_force
-        )
-
-        settled = df[
-            (
-                df["force"] >= lower_bound
-            )
-            &
-            (
-                df["force"] <= upper_bound
-            )
-        ]
-
-        if len(settled) > 0:
-
-            settling_time = (
-                settled["time"].iloc[0]
-                - df["time"].iloc[0]
-            )
-
-        else:
-            settling_time = np.nan
 
         # =================================================
         # SAVE RESULTS
         # =================================================
 
-        all_results.append({
+        results.append({
 
-            "file": file,
+            "File": file,
 
-            "target_force_N": target_force,
+            "Target Force (N)": target_force,
 
-            "mean_force_N": mean_force,
+            "Peak Force (N)": peak_force,
 
-            "absolute_error_N": abs_error,
+            "Absolute Error (N)": absolute_error,
 
-            "percent_error": pct_error,
-
-            "std_force_N": std_force,
-
-            "rms_error_N": rms_error,
-
-            "overshoot_percent": overshoot,
-
-            "settling_time_s": settling_time
+            "Percent Error (%)": percent_error
         })
 
     # =====================================================
-    # CREATE DATAFRAMES
+    # CREATE DATAFRAME
     # =====================================================
 
-    all_results_df = pd.DataFrame(
-        all_results
-    )
+    results_df = pd.DataFrame(results)
 
-    if len(all_results_df) == 0:
+    if len(results_df) == 0:
         raise ValueError(
             "No valid calibration data found."
         )
 
     # =====================================================
-    # SUMMARY TABLE
+    # SUMMARY
     # =====================================================
 
-    summary_df = all_results_df.groupby(
-        "target_force_N"
+    summary_df = results_df.groupby(
+        "Target Force (N)"
     ).agg({
 
-        "mean_force_N": "mean",
+        "Peak Force (N)": [
+            "mean",
+            "std"
+        ],
 
-        "absolute_error_N": "mean",
+        "Absolute Error (N)": "mean",
 
-        "percent_error": "mean",
+        "Percent Error (%)": "mean"
 
-        "std_force_N": "mean",
+    })
 
-        "rms_error_N": "mean",
+    summary_df.columns = [
 
-        "overshoot_percent": "mean",
+        "Mean Peak Force (N)",
 
-        "settling_time_s": "mean"
+        "Peak Force STD (N)",
 
-    }).reset_index()
+        "Mean Absolute Error (N)",
 
-    # =====================================================
-    # REPEATABILITY TABLE
-    # =====================================================
+        "Mean Percent Error (%)"
+    ]
 
-    repeatability_df = all_results_df.groupby(
-        "target_force_N"
-    ).agg({
-
-        "mean_force_N": "std",
-
-        "absolute_error_N": "std",
-
-        "percent_error": "std",
-
-        "std_force_N": "std",
-
-        "rms_error_N": "std",
-
-        "overshoot_percent": "std",
-
-        "settling_time_s": "std"
-
-    }).reset_index()
+    summary_df = summary_df.reset_index()
 
     # =====================================================
     # SAVE EXCEL
@@ -1947,7 +1865,7 @@ def analyse_calibration_folder(folder_path):
 
     output_file = os.path.join(
         folder_path,
-        "CALIBRATION_ANALYSIS.xlsx"
+        "_CALIBRATION_ANALYSIS.xlsx"
     )
 
     with pd.ExcelWriter(
@@ -1955,7 +1873,7 @@ def analyse_calibration_folder(folder_path):
         engine="openpyxl"
     ) as writer:
 
-        all_results_df.to_excel(
+        results_df.to_excel(
             writer,
             sheet_name="ALL_RESULTS",
             index=False
@@ -1964,12 +1882,6 @@ def analyse_calibration_folder(folder_path):
         summary_df.to_excel(
             writer,
             sheet_name="SUMMARY",
-            index=False
-        )
-
-        repeatability_df.to_excel(
-            writer,
-            sheet_name="REPEATABILITY",
             index=False
         )
 
@@ -1985,7 +1897,7 @@ def create_calibration_plots(folder_path):
 
     excel_file = os.path.join(
         folder_path,
-        "CALIBRATION_ANALYSIS.xlsx"
+        "_CALIBRATION_ANALYSIS.xlsx"
     )
 
     summary_df = pd.read_excel(
@@ -2000,27 +1912,30 @@ def create_calibration_plots(folder_path):
     plt.figure(figsize=(6,5))
 
     plt.plot(
-        summary_df["target_force_N"],
-        summary_df["mean_force_N"],
-        marker="o"
+        summary_df["Target Force (N)"],
+        summary_df["Mean Peak Force (N)"],
+        marker="o",
+        label="Measured"
     )
 
     plt.plot(
-        summary_df["target_force_N"],
-        summary_df["target_force_N"],
-        linestyle="--"
+        summary_df["Target Force (N)"],
+        summary_df["Target Force (N)"],
+        linestyle="--",
+        label="Target"
     )
 
     plt.xlabel("Target Force (N)")
-    plt.ylabel("Measured Force (N)")
+    plt.ylabel("Force (N)")
     plt.title("Measured vs Target Force")
+    plt.legend()
 
     plt.tight_layout()
 
     plt.savefig(
         os.path.join(
             folder_path,
-            "Measured_vs_Target.png"
+            "_Measured_vs_Target.png"
         ),
         dpi=300
     )
@@ -2028,14 +1943,42 @@ def create_calibration_plots(folder_path):
     plt.close()
 
     # =====================================================
-    # 2. PERCENT ERROR
+    # 2. ABSOLUTE ERROR
     # =====================================================
 
     plt.figure(figsize=(6,5))
 
     plt.plot(
-        summary_df["target_force_N"],
-        summary_df["percent_error"],
+        summary_df["Target Force (N)"],
+        summary_df["Mean Absolute Error (N)"],
+        marker="o"
+    )
+
+    plt.xlabel("Target Force (N)")
+    plt.ylabel("Absolute Error (N)")
+    plt.title("Absolute Error vs Force")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "_Absolute_Error.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    # =====================================================
+    # 3. PERCENT ERROR
+    # =====================================================
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(
+        summary_df["Target Force (N)"],
+        summary_df["Mean Percent Error (%)"],
         marker="o"
     )
 
@@ -2048,7 +1991,7 @@ def create_calibration_plots(folder_path):
     plt.savefig(
         os.path.join(
             folder_path,
-            "Percent_Error.png"
+            "_Percent_Error.png"
         ),
         dpi=300
     )
@@ -2056,83 +1999,27 @@ def create_calibration_plots(folder_path):
     plt.close()
 
     # =====================================================
-    # 3. RMS ERROR
+    # 4. STD (FORCE STABILITY)
     # =====================================================
 
     plt.figure(figsize=(6,5))
 
     plt.plot(
-        summary_df["target_force_N"],
-        summary_df["rms_error_N"],
-        marker="o"
-    )
-
-    plt.xlabel("Target Force (N)")
-    plt.ylabel("RMS Error (N)")
-    plt.title("RMS Error vs Force")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "RMS_Error.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    # =====================================================
-    # 4. STD
-    # =====================================================
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        summary_df["target_force_N"],
-        summary_df["std_force_N"],
+        summary_df["Target Force (N)"],
+        summary_df["Peak Force STD (N)"],
         marker="o"
     )
 
     plt.xlabel("Target Force (N)")
     plt.ylabel("STD (N)")
-    plt.title("Force Stability")
+    plt.title("Force Stability (Peak Force STD)")
 
     plt.tight_layout()
 
     plt.savefig(
         os.path.join(
             folder_path,
-            "Force_STD.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    # =====================================================
-    # 5. SETTLING TIME
-    # =====================================================
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        summary_df["target_force_N"],
-        summary_df["settling_time_s"],
-        marker="o"
-    )
-
-    plt.xlabel("Target Force (N)")
-    plt.ylabel("Settling Time (s)")
-    plt.title("Settling Time")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "Settling_Time.png"
+            "_Force_STD.png"
         ),
         dpi=300
     )
@@ -2140,3 +2027,5 @@ def create_calibration_plots(folder_path):
     plt.close()
 
     print("Calibration plots created.")
+
+

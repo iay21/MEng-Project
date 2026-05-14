@@ -259,6 +259,32 @@ def calibration_plots():
             str(e)
         )
 
+def force_only_analysis_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select folder of force data"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.force_only_analysis(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Force-only analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
 
 # =========================
 # GUI LAYOUT
@@ -320,6 +346,14 @@ tk.Button(
     width=25,
     height=2,
     command=create_heatmap
+).pack(pady=10)
+
+tk.Button(
+    root,
+    text="Force Only Analysis",
+    width=25,
+    height=2,
+    command=force_only_analysis_gui
 ).pack(pady=10)
 
 tk.Button(
