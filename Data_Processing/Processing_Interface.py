@@ -150,6 +150,115 @@ def analyse_calibration_folder():
 
 
 
+def full_analysis_folder():
+
+    folder_path = filedialog.askdirectory(
+        title="Select master folder containing frequency folders"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.full_frequency_force_analysis(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Full analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+def create_heatmap():
+
+    folder_path = filedialog.askdirectory(
+        title="Select master data folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.create_force_error_heatmap(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Heat map created!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+def analyse_calibration():
+
+    folder_path = filedialog.askdirectory(
+        title="Select calibration data folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.analyse_calibration_folder(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Calibration analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+
+def calibration_plots():
+
+    folder_path = filedialog.askdirectory(
+        title="Select calibration analysis folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.create_calibration_plots(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Calibration plots created!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
 
 # =========================
 # GUI LAYOUT
@@ -165,38 +274,68 @@ tk.Label(
     font=("Segoe UI", 14, "bold")
 ).pack(pady=20)
 
+# tk.Button(
+#     root,
+#     text="Process Single File",
+#     width=25,
+#     height=2,
+#     command=process_single
+# ).pack(pady=10)
+
+# tk.Button(
+#     root,
+#     text="Process Folder",
+#     width=25,
+#     height=2,
+#     command=process_folder
+# ).pack(pady=10)
+
+# tk.Button(
+#     root,
+#     text="Analyse Force Folder",
+#     width=25,
+#     height=2,
+#     command=analyse_force_folder
+# ).pack(pady=10)
+
+# tk.Button(
+#     root,
+#     text="Analyse Calibration Folder",
+#     width=25,
+#     height=2,
+#     command=analyse_calibration_folder
+# ).pack(pady=10)
+
 tk.Button(
     root,
-    text="Process Single File",
+    text="Full Freq Comparision",
     width=25,
     height=2,
-    command=process_single
+    command=full_analysis_folder
 ).pack(pady=10)
 
 tk.Button(
     root,
-    text="Process Folder",
+    text="Create Freq Heatmap",
     width=25,
     height=2,
-    command=process_folder
+    command=create_heatmap
 ).pack(pady=10)
 
 tk.Button(
     root,
-    text="Analyse Force Folder",
+    text="Analyse Z Calibration",
     width=25,
     height=2,
-    command=analyse_force_folder
+    command=analyse_calibration
 ).pack(pady=10)
 
 tk.Button(
     root,
-    text="Analyse Calibration Folder",
+    text="Z Calibration Plots",
     width=25,
     height=2,
-    command=analyse_calibration_folder
+    command=calibration_plots
 ).pack(pady=10)
-
-
 
 root.mainloop()
