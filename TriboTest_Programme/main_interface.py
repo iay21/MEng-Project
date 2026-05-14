@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import simpledialog
 from tkinter import filedialog
+from tkinter import messagebox
 import threading
 import sys
 import os
@@ -686,7 +687,7 @@ def prompt_and_start_z_calibration_test():
 
     dialog = tk.Toplevel(root)
     dialog.title("Z Calibration Test Setup")
-    dialog.geometry("350x200")
+    dialog.geometry("350x250")
     dialog.transient(root)
     dialog.grab_set()
 
@@ -701,8 +702,19 @@ def prompt_and_start_z_calibration_test():
     tk.Label(frame, text="This will run calibration across all force ranges", wraplength=300).pack(anchor="w")
     tk.Label(frame, text="(10 cycles per force level)", wraplength=300).pack(anchor="w", pady=10)
 
+    # -------- TEST NAME INPUT --------
+    tk.Label(frame, text="Test Name/Material:").pack(anchor="w")
+    test_entry = tk.Entry(frame, width=30)
+    test_entry.pack(anchor="w", pady=5)
+    test_entry.insert(0, Testing_functions.z_cal_test)  # Default value
+
     # -------- START BUTTON --------
     def start():
+        test_name = test_entry.get().strip()
+        if not test_name:
+            tk.messagebox.showerror("Error", "Please enter a test name.")
+            return
+        Testing_functions.z_cal_test = test_name
         dialog.destroy()
         threading.Thread(
             target=lambda: Testing_functions.run_z_calibration_test(),

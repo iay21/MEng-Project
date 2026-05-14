@@ -35,7 +35,7 @@ SAVE_DIR = r"C:\Users\sushi\OneDrive\Documents\Imperial\.DE4\Masters project\_TE
 safe_force_limit = 36 # N
 touch_threshold = 0.2 # N
 contact_force = 10 # N
-contact_frequency = 1.0 # Hz
+contact_frequency = 0.5 # Hz
 contact_time = 0.5 # s
 separation_time = 0.5 # s
 separation_height = 3 # mm
@@ -80,6 +80,7 @@ csv_lock = threading.Lock()
 load_resistance = 1e6   # Ohms (example default)
 measurement_mode = "VOLTAGE"   # or "CURRENT"
 counter_material = "UNKNOWN"
+z_cal_test = "DEFAULT"  # Test name/material for z calibration
 
 
 # ---------------- COMMS ----------------
@@ -185,6 +186,16 @@ def speed(v):
 def z_go_to(z):
     send_gcode(f"G1 Z{z}")
 
+def adjust_z_up():
+    send_gcode("G91")
+    send_gcode("G1 Z0.01")
+    send_gcode("G90")
+
+def adjust_z_down():
+    send_gcode("G91")
+    send_gcode("G1 Z-0.01")
+    send_gcode("G90")
+
 def y_slide(d):
     send_gcode("G91")
     send_gcode(f"G1 Y{d}")
@@ -277,11 +288,11 @@ def calibrate_z(z_coord=85, buffer = 0.01):
         time.sleep(1) # give printer time to move and force to update 
         # pause(1)
 
-        if latest_force < (0.7 * corrected_target_force):
+        if latest_force < (0.65 * corrected_target_force):
             z_coord -= big_step # move down by big step
             print(f"Moving down by big step to z={z_coord:.2f} (force={latest_force:.2f} N)")
 
-        elif (0.7 * corrected_target_force) <= latest_force and latest_force <= (0.98 * corrected_target_force):
+        elif (0.65 * corrected_target_force) <= latest_force and latest_force <= (0.99 * corrected_target_force):
             z_coord -= step # move down by step
             print(f"Moving down by step to z={z_coord:.2f} (force={latest_force:.2f} N)")
         
@@ -301,32 +312,15 @@ def calibrate_z(z_coord=85, buffer = 0.01):
 def correct_z_for_force():
     global latest_force, contact_time, cycle_start_time
 
-    tolerance = 0.3 # acceptable force deviation in N
-    buffer = 0.01 # time to wait for force to stabilize after moving in seconds  
-
-    z_coord = contact_z_coord
+    tolerance = 0.01 * contact_force  # 1% tolerance
 
     if latest_force > contact_force + tolerance:
-        z_coord += 0.1 # move up if force is too high
+        adjust_z_up() # move up if force is too high
         
     elif latest_force < contact_force - tolerance:
-        z_coord -= 0.1 # move down if force is too low
+        adjust_z_down() # move down if force is too low
         
-    z_go_to(z_coord)
 
-    
-    # while time.time() - cycle_start_time < buffer:
-    #     time.sleep(0.01) # wait for force to update
-
-    # while time.time() - cycle_start_time < contact_time:
-    #     if latest_force > contact_force + tolerance:
-    #         z_coord += 0.1 # move up if force is too high
-        
-    #     elif latest_force < contact_force - tolerance:
-    #         z_coord -= 0.1 # move down if force is too low
-        
-    #     z_go_to(z_coord)
-    #     time.sleep(0.01)
 
 
 
@@ -349,14 +343,14 @@ def contact_cycle():
         send_gcode("M400") # waits for printer to finish moving
        
         while time.time() - cycle_start_time < (0.5* cycle_time):
-            # correct_z_for_force() # actively holds correct force during the set contact time   
+            correct_z_for_force() # actively holds correct force during the set contact time   
             # current_z = contact_z_coord
             # if latest_force > contact_force + 0.5:
             #     z_go_to(contact_z_coord + 0.1) # move up if force is too high
             # elif latest_force < contact_force - 0.5:
             #     z_go_to(contact_z_coord - 0.1) # move down if force is too low
             
-            time.sleep(0.01) # wait for force to update
+            time.sleep(0.1) # wait for force to update
         
         z_go_to(separation_z_coord)
         re_centre()
@@ -573,7 +567,7 @@ def run_slide_protocol(material):
     send_gcode("M400") # waits for printer to finish moving
 
 def run_z_calibration_test():
-    global contact_force
+    global contact_force, z_cal_test
     original_force = contact_force  # Save original value
     
     for f in range_of_forces:
@@ -581,7 +575,7 @@ def run_z_calibration_test():
         print(f"Running z calibration for target force {contact_force}N")
 
         for i in range(10):
-            start_test('z-calibration', "test", "NA", load_resistance, measurement_mode, contact_force) 
+            start_test('z-calibration', z_cal_test, "NA", load_resistance, measurement_mode, contact_force) 
             send_gcode("M400")  # Wait for calibration to complete
 
             time.sleep(2)
