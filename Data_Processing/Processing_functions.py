@@ -1,9 +1,38 @@
 import pandas as pd
 import numpy as np
 import os
+import matplotlib.pyplot as plt
 
 FORCE_THRESHOLD = 0.5
 MIN_CYCLE_POINTS = 5
+
+def plot_force_and_voltage(file):
+
+    df = pd.read_csv(
+        file,
+        sep=r"\s+|,",
+        engine="python",
+        comment="#",
+        header=None
+    )
+    df.columns = ["time", "force", "voltage"]
+
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Force (N)", color="tab:blue")
+    ax1.plot(df["time"], df["force"], color="tab:blue")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("Voltage (V)", color="tab:orange")
+    ax2.plot(df["time"], df["voltage"], color="tab:orange")
+    ax2.tick_params(axis="y", labelcolor="tab:orange")
+
+    plt.title("Force and Voltage vs Time")
+    plt.tight_layout()
+    plt.show()
+    # this is hella broken 
 
 def process_data(file):
 
@@ -2029,3 +2058,512 @@ def create_calibration_plots(folder_path):
     print("Calibration plots created.")
 
 
+def analyse_force_repeatability(folder_path):
+
+    import os
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    FORCE_THRESHOLD = 0.5
+    MIN_CYCLE_POINTS = 5
+
+    # =====================================================
+    # STORAGE
+    # =====================================================
+
+    all_cycle_data = []
+
+    test_summary_data = []
+
+    # =====================================================
+    # FIND FILES
+    # =====================================================
+
+    csv_files = sorted([
+        f for f in os.listdir(folder_path)
+        if (
+            f.endswith(".csv")
+            and "_analysis" not in f
+            and "_analysed" not in f
+        )
+    ])
+
+    if len(csv_files) == 0:
+        raise ValueError(
+            "No CSV files found."
+        )
+
+    # =====================================================
+    # PROCESS EACH FILE
+    # =====================================================
+
+    for file_index, file in enumerate(csv_files):
+
+        full_path = os.path.join(
+            folder_path,
+            file
+        )
+
+        # =================================================
+        # READ TARGET FORCE
+        # =================================================
+
+        target_force = None
+
+        with open(full_path, "r") as f:
+
+            for line in f:
+
+                if "# Target Force (N)" in line:
+
+                    parts = line.strip().split(",")
+
+                    try:
+                        target_force = float(parts[1])
+                    except:
+                        pass
+
+                if line.startswith("time"):
+                    break
+
+        if target_force is None:
+            continue
+
+        # =================================================
+        # FIND DATA START
+        # =================================================
+
+        data_start = 0
+
+        with open(full_path, "r") as f:
+
+            for i, line in enumerate(f):
+
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                if line.startswith("#"):
+                    continue
+
+                if "time" in line.lower():
+                    continue
+
+                data_start = i
+                break
+
+        # =================================================
+        # LOAD DATA
+        # =================================================
+
+        df = pd.read_csv(
+            full_path,
+            sep=r"[\s,\t]+",
+            engine="python",
+            skiprows=data_start,
+            header=None
+        )
+
+        df = df.iloc[:, :2]
+
+        df.columns = [
+            "time",
+            "force"
+        ]
+
+        df["force"] = pd.to_numeric(
+            df["force"],
+            errors="coerce"
+        )
+
+        df["time"] = pd.to_numeric(
+            df["time"],
+            errors="coerce"
+        )
+
+        df = df.dropna()
+
+        # =================================================
+        # CONTACT DETECTION
+        # =================================================
+
+        df["contact"] = (
+            df["force"] > FORCE_THRESHOLD
+        )
+
+        df["contact_shift"] = (
+            df["contact"].shift(1)
+        )
+
+        cycle_starts = df[
+            (df["contact"] == True)
+            &
+            (df["contact_shift"] == False)
+        ].index.tolist()
+
+        cycle_ends = df[
+            (df["contact"] == False)
+            &
+            (df["contact_shift"] == True)
+        ].index.tolist()
+
+        if (
+            len(cycle_starts) == 0
+            or
+            len(cycle_ends) == 0
+        ):
+            continue
+
+        if cycle_ends[0] < cycle_starts[0]:
+            cycle_ends.pop(0)
+
+        min_len = min(
+            len(cycle_starts),
+            len(cycle_ends)
+        )
+
+        cycle_starts = cycle_starts[:min_len]
+        cycle_ends = cycle_ends[:min_len]
+
+        # =================================================
+        # PEAK FORCE PER CYCLE
+        # =================================================
+
+        peak_forces = []
+
+        for cycle_num, (start, end) in enumerate(
+            zip(cycle_starts, cycle_ends),
+            start=1
+        ):
+
+            cycle = df.loc[start:end]
+
+            if len(cycle) < MIN_CYCLE_POINTS:
+                continue
+
+            peak_force = cycle[
+                "force"
+            ].max()
+
+            peak_forces.append(
+                peak_force
+            )
+
+            all_cycle_data.append({
+
+                "File": file,
+
+                "Target Force (N)": target_force,
+
+                "Cycle": cycle_num,
+
+                "Peak Force (N)": peak_force
+            })
+
+        # =================================================
+        # TEST SUMMARY
+        # =================================================
+
+        if len(peak_forces) == 0:
+            continue
+
+        peak_forces = np.array(
+            peak_forces
+        )
+
+        mean_peak = np.mean(
+            peak_forces
+        )
+
+        std_peak = np.std(
+            peak_forces,
+            ddof=1
+        )
+
+        cv_peak = (
+            std_peak / mean_peak
+        ) * 100
+
+        force_range = (
+            np.max(peak_forces)
+            -
+            np.min(peak_forces)
+        )
+
+        abs_error = (
+            mean_peak - target_force
+        )
+
+        pct_error = (
+            abs_error / target_force
+        ) * 100
+
+        test_summary_data.append({
+
+            "File": file,
+
+            "Target Force (N)": target_force,
+
+            "Mean Peak Force (N)": mean_peak,
+
+            "STD Peak Force (N)": std_peak,
+
+            "CV (%)": cv_peak,
+
+            "Range (N)": force_range,
+
+            "Absolute Error (N)": abs_error,
+
+            "Percent Error (%)": pct_error
+        })
+
+        # =================================================
+        # PLOT: FORCE DRIFT
+        # =================================================
+
+        plt.figure(figsize=(7,5))
+
+        plt.plot(
+            range(1, len(peak_forces)+1),
+            peak_forces,
+            marker="o"
+        )
+
+        plt.axhline(
+            target_force,
+            linestyle="--"
+        )
+
+        plt.xlabel("Cycle Number")
+
+        plt.ylabel("Peak Force (N)")
+
+        plt.title(
+            f"{target_force}N Repeatability"
+        )
+
+        plt.tight_layout()
+
+        plot_name = (
+            f"{int(target_force)}N_"
+            f"{file_index+1}_drift.png"
+        )
+
+        plt.savefig(
+            os.path.join(
+                folder_path,
+                plot_name
+            ),
+            dpi=300
+        )
+
+        plt.close()
+
+    # =====================================================
+    # CREATE DATAFRAMES
+    # =====================================================
+
+    all_cycles_df = pd.DataFrame(
+        all_cycle_data
+    )
+
+    test_summary_df = pd.DataFrame(
+        test_summary_data
+    )
+
+    if len(test_summary_df) == 0:
+        raise ValueError(
+            "No valid repeatability data."
+        )
+
+    # =====================================================
+    # FORCE SUMMARY
+    # =====================================================
+
+    force_summary_df = test_summary_df.groupby(
+        "Target Force (N)"
+    ).agg({
+
+        "Mean Peak Force (N)": "mean",
+
+        "STD Peak Force (N)": "mean",
+
+        "CV (%)": "mean",
+
+        "Range (N)": "mean",
+
+        "Absolute Error (N)": "mean",
+
+        "Percent Error (%)": "mean"
+
+    }).reset_index()
+
+    force_summary_df = force_summary_df.sort_values(
+        "Target Force (N)"
+    )
+
+    # =====================================================
+    # SAVE EXCEL
+    # =====================================================
+
+    output_excel = os.path.join(
+        folder_path,
+        "FORCE_REPEATABILITY_ANALYSIS.xlsx"
+    )
+
+    with pd.ExcelWriter(
+        output_excel,
+        engine="openpyxl"
+    ) as writer:
+
+        all_cycles_df.to_excel(
+            writer,
+            sheet_name="ALL_CYCLES",
+            index=False
+        )
+
+        test_summary_df.to_excel(
+            writer,
+            sheet_name="TEST_SUMMARY",
+            index=False
+        )
+
+        force_summary_df.to_excel(
+            writer,
+            sheet_name="FORCE_SUMMARY",
+            index=False
+        )
+
+    # =====================================================
+    # BOXPLOT
+    # =====================================================
+
+    plt.figure(figsize=(8,6))
+
+    grouped_data = []
+
+    labels = []
+
+    for force in sorted(
+        all_cycles_df[
+            "Target Force (N)"
+        ].unique()
+    ):
+
+        subset = all_cycles_df[
+            all_cycles_df[
+                "Target Force (N)"
+            ] == force
+        ]
+
+        grouped_data.append(
+            subset["Peak Force (N)"]
+        )
+
+        labels.append(
+            f"{int(force)}N"
+        )
+
+    plt.boxplot(
+        grouped_data,
+        labels=labels
+    )
+
+    plt.ylabel("Peak Force (N)")
+
+    plt.title(
+        "Force Repeatability"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "Force_Boxplot.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    # =====================================================
+    # STD VS FORCE
+    # =====================================================
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(
+        force_summary_df[
+            "Target Force (N)"
+        ],
+        force_summary_df[
+            "STD Peak Force (N)"
+        ],
+        marker="o"
+    )
+
+    plt.xlabel("Target Force (N)")
+
+    plt.ylabel("STD (N)")
+
+    plt.title(
+        "Repeatability STD"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "STD_vs_Force.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    # =====================================================
+    # CV VS FORCE
+    # =====================================================
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(
+        force_summary_df[
+            "Target Force (N)"
+        ],
+        force_summary_df[
+            "CV (%)"
+        ],
+        marker="o"
+    )
+
+    plt.xlabel("Target Force (N)")
+
+    plt.ylabel("CV (%)")
+
+    plt.title(
+        "Coefficient of Variation"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "CV_vs_Force.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    print(
+        f"Saved repeatability analysis:\n"
+        f"{output_excel}"
+    )
+
+    return output_excel
