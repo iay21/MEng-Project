@@ -9,6 +9,23 @@ import Processing_functions  # your file
 # PROCESS SINGLE FILE
 # =========================
 
+def plot_one_file():
+
+    file = filedialog.askopenfilename(
+        filetypes=[("CSV files", "*.csv")]
+    )
+
+    if not file:
+        return
+
+    try:
+        Processing_functions.plot_force_and_voltage(file)
+
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+
+
 def process_single():
 
     file = filedialog.askopenfilename(
@@ -255,6 +272,33 @@ def force_only_analysis_gui():
             str(e)
         )
 
+def repeatability_analysis():
+
+    folder_path = filedialog.askdirectory(
+        title="Select repeatability data folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.analyse_force_repeatability(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Repeatability analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
 # =========================
 # GUI LAYOUT
 # =========================
@@ -303,6 +347,14 @@ tk.Label(
 
 tk.Button(
     root,
+    text="Plot Force & Voltage",
+    width=25,
+    height=2,
+    command=plot_one_file
+).pack(pady=10)
+
+tk.Button(
+    root,
     text="Full Freq Comparision",
     width=25,
     height=2,
@@ -334,5 +386,13 @@ tk.Button(
 ).pack(pady=10)
 
 
+
+tk.Button(
+    root,
+    text="Repeatability Analysis",
+    width=25,
+    height=2,
+    command=repeatability_analysis
+).pack(pady=10)
 
 root.mainloop()
