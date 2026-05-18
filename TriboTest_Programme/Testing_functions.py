@@ -308,11 +308,21 @@ def calibrate_z(z_coord=85, buffer = 0.01):
 
     return neutral_z_coord, contact_z_coord, separation_z_coord
 
+def repeat_calibrate_z():
+    for i in range(10):
+        calibrate_z()
+        send_gcode("M400") # waits for printer to finish moving
+        re_centre()
+        send_gcode("M400") # waits for printer to finish moving
+        time.sleep(2)
+
+
 
 def correct_z_for_force():
     global latest_force, contact_time, cycle_start_time
 
-    tolerance = 0.01 * contact_force  # 1% tolerance
+    # tolerance = 0.01 * contact_force  # 1% tolerance
+    tolerance = 0.1 # N tolerance
 
     if latest_force > contact_force + tolerance:
         adjust_z_up() # move up if force is too high
@@ -341,16 +351,18 @@ def contact_cycle():
         cycle_start_time = time.time() # record the start time for this cycle
         z_go_to(contact_z_coord)
         send_gcode("M400") # waits for printer to finish moving
-       
+
+        time.sleep(0.1) # short delay to allow force to update after contact
+
         while time.time() - cycle_start_time < (0.5* cycle_time):
-            correct_z_for_force() # actively holds correct force during the set contact time   
+            # correct_z_for_force() # actively holds correct force during the set contact time   
             # current_z = contact_z_coord
             # if latest_force > contact_force + 0.5:
             #     z_go_to(contact_z_coord + 0.1) # move up if force is too high
             # elif latest_force < contact_force - 0.5:
             #     z_go_to(contact_z_coord - 0.1) # move down if force is too low
             
-            time.sleep(0.1) # wait for force to update
+            time.sleep(0.05) # wait for force to update
         
         z_go_to(separation_z_coord)
         re_centre()
@@ -487,7 +499,7 @@ def start_test(test_name, material, counter_material, load_resistance, measureme
 
     elif test_name == "z-calibration":
         print("Z calibration starting")
-        calibrate_z()
+        repeat_calibrate_z()
     
     else:
         print("Invalid test type")
@@ -573,12 +585,9 @@ def run_z_calibration_test():
     for f in range_of_forces:
         contact_force = f
         print(f"Running z calibration for target force {contact_force}N")
-
-        for i in range(10):
-            start_test('z-calibration', z_cal_test, "NA", load_resistance, measurement_mode, contact_force) 
-            send_gcode("M400")  # Wait for calibration to complete
-
-            time.sleep(2)
+        start_test('z-calibration', z_cal_test, "NA", load_resistance, measurement_mode, contact_force) 
+        send_gcode("M400")  # Wait for calibration to complete
+        time.sleep(2)
     
     contact_force = original_force  # Restore original value
 

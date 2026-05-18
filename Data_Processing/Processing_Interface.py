@@ -117,37 +117,6 @@ def analyse_force_folder():
         )
 
 
-def analyse_calibration_folder():
-
-    folder_path = filedialog.askdirectory(
-        title="Select calibration folder"
-    )
-
-    if not folder_path:
-        return
-
-    try:
-
-        output_file = (
-            Processing_functions
-            .analyse_calibration_folder_to_excel(
-                folder_path
-            )
-        )
-
-        messagebox.showinfo(
-            "Success",
-            f"Calibration analysis saved:\n\n"
-            f"{output_file}"
-        )
-
-    except Exception as e:
-
-        messagebox.showerror(
-            "Error",
-            str(e)
-        )
-
 
 
 def full_analysis_folder():
@@ -215,9 +184,9 @@ def analyse_calibration():
 
     try:
 
-        Processing_functions.analyse_calibration_folder(
-            folder_path
-        )
+        Processing_functions.analyse_calibration_folder(folder_path)
+
+        Processing_functions.create_calibration_plots(folder_path)
 
         messagebox.showinfo(
             "Success",
@@ -364,12 +333,6 @@ tk.Button(
     command=analyse_calibration
 ).pack(pady=10)
 
-tk.Button(
-    root,
-    text="Z Calibration Plots",
-    width=25,
-    height=2,
-    command=calibration_plots
-).pack(pady=10)
+
 
 root.mainloop()
