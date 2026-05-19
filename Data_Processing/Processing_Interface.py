@@ -112,9 +112,7 @@ def voltage_convergence():
     try:
 
         Processing_functions.analyse_voltage_cycle_convergence(
-            folder_path,
-            voltage_metric="V_pp",
-            threshold_percent=5
+            folder_path
         )
 
         messagebox.showinfo(
