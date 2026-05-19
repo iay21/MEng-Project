@@ -29,7 +29,7 @@ Test parameters can be changed within the file or in the live terminal
 arduino_port = "COM10"
 printer_port = "COM11"
 
-SAVE_DIR = r"C:\Users\sushi\OneDrive\Documents\Imperial\.DE4\Masters project\_TEST DATA\RIG-SETUP\_Frequency Testing"
+SAVE_DIR = r"C:\Users\sushi\OneDrive\Documents\Imperial\.DE4\Masters project\_TEST DATA\RIG-SETUP"
 
 # === BASELINE TEST PARAMETERS === 
 safe_force_limit = 36 # N
@@ -52,6 +52,12 @@ big_step = 0.5
 
 number_of_contact_tests = 2
 number_of_slide_tests = 1
+
+
+initial_wait = 0.2 # time to wait after first contact before starting active force control (s)
+z_correct_delay = 0.05 # time to wait between z adjustments to allow force to
+cycle_force_tolerance = 0.01 # N tolerance
+z_correct_step = 0.01 # mm to adjust z by when correcting for force
 
 
 '''
@@ -186,14 +192,14 @@ def speed(v):
 def z_go_to(z):
     send_gcode(f"G1 Z{z}")
 
-def adjust_z_up():
+def adjust_z_up(step):
     send_gcode("G91")
-    send_gcode("G1 Z0.01")
+    send_gcode(f"G1 Z{step}")
     send_gcode("G90")
 
-def adjust_z_down():
+def adjust_z_down(step):
     send_gcode("G91")
-    send_gcode("G1 Z-0.01")
+    send_gcode(f"G1 Z-{step}")
     send_gcode("G90")
 
 def y_slide(d):
@@ -319,26 +325,19 @@ def repeat_calibrate_z():
 
 
 def correct_z_for_force():
-    global latest_force, contact_time, cycle_start_time
+    global latest_force, contact_time, cycle_start_time, cycle_force_tolerance, z_correct_step
 
-    # tolerance = 0.01 * contact_force  # 1% tolerance
-    tolerance = 0.01 # N tolerance
-
-    if latest_force > contact_force + tolerance:
-        adjust_z_up() # move up if force is too high
+    if latest_force > contact_force + cycle_force_tolerance:
+        adjust_z_up(z_correct_step) # move up if force is too high
         
-    elif latest_force < contact_force - tolerance:
-        adjust_z_down() # move down if force is too low
+    elif latest_force < contact_force - cycle_force_tolerance:
+        adjust_z_down(z_correct_step) # move down if force is too low
         
-
-
-
 
 # ---------------- TEST CYCLES ----------------
 
 def contact_cycle():
-    global no_contact_cycles, contact_speed, separation_z_coord, contact_frequency
-
+    global no_contact_cycles, contact_speed, separation_z_coord, contact_frequency, initial_wait, z_correct_delay, contact_force
     print("Contact cycle start")
     speed(fast_speed)
     x_y_centre()
@@ -352,17 +351,14 @@ def contact_cycle():
         z_go_to(contact_z_coord)
         send_gcode("M400") # waits for printer to finish moving
 
-        time.sleep(0.1) # short delay to allow force to update after contact
 
-        while time.time() - cycle_start_time < (0.5* cycle_time):
+        # time.sleep(initial_wait) # short delay to allow force to update after contact
+        scaled_delay = contact_force/500 # scales the initial wait time based on the target force (higher forces may need a slightly longer delay to stabilize)
+        time.sleep(scaled_delay)
+
+        while time.time() - cycle_start_time < (0.65* cycle_time):
             correct_z_for_force() # actively holds correct force during the set contact time   
-            # current_z = contact_z_coord
-            # if latest_force > contact_force + 0.5:
-            #     z_go_to(contact_z_coord + 0.1) # move up if force is too high
-            # elif latest_force < contact_force - 0.5:
-            #     z_go_to(contact_z_coord - 0.1) # move down if force is too low
-            
-            time.sleep(0.1) # wait for force to update
+            time.sleep(z_correct_delay) # wait for force to update
         
         z_go_to(separation_z_coord)
         re_centre()

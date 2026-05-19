@@ -811,6 +811,10 @@ vars_list = [
     "separation_height",
     "safe_force_limit",
     "touch_threshold",
+    "cycle_force_tolerance",
+    "initial_wait",
+    "z_correct_delay",
+    "z_correct_step"
 ]
 
 for v in vars_list:
