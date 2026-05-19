@@ -322,7 +322,7 @@ def correct_z_for_force():
     global latest_force, contact_time, cycle_start_time
 
     # tolerance = 0.01 * contact_force  # 1% tolerance
-    tolerance = 0.1 # N tolerance
+    tolerance = 0.01 # N tolerance
 
     if latest_force > contact_force + tolerance:
         adjust_z_up() # move up if force is too high
@@ -355,14 +355,14 @@ def contact_cycle():
         time.sleep(0.1) # short delay to allow force to update after contact
 
         while time.time() - cycle_start_time < (0.5* cycle_time):
-            # correct_z_for_force() # actively holds correct force during the set contact time   
+            correct_z_for_force() # actively holds correct force during the set contact time   
             # current_z = contact_z_coord
             # if latest_force > contact_force + 0.5:
             #     z_go_to(contact_z_coord + 0.1) # move up if force is too high
             # elif latest_force < contact_force - 0.5:
             #     z_go_to(contact_z_coord - 0.1) # move down if force is too low
             
-            time.sleep(0.05) # wait for force to update
+            time.sleep(0.1) # wait for force to update
         
         z_go_to(separation_z_coord)
         re_centre()
