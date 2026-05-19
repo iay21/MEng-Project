@@ -1264,7 +1264,11 @@ def full_frequency_force_analysis(master_folder):
 
     return output_file
 
-def analyse_force_control_method(method_folder):
+def analyse_force_control_method(
+    method_folder,
+    reject_outliers=True,
+    mad_threshold=4.0
+):
 
     import os
     import pandas as pd
@@ -1291,7 +1295,7 @@ def analyse_force_control_method(method_folder):
         raise ValueError("No CSV files found.")
 
     # =====================================================
-    # HELPER: READ TARGET FORCE
+    # HELPER FUNCTIONS
     # =====================================================
 
     def read_target_force(file_path):
@@ -1317,9 +1321,6 @@ def analyse_force_control_method(method_folder):
 
         return target_force
 
-    # =====================================================
-    # HELPER: LOAD DATA
-    # =====================================================
 
     def load_force_data(file_path):
 
@@ -1359,11 +1360,14 @@ def analyse_force_control_method(method_folder):
 
         df = df.dropna()
 
+        # remove isolated first-row time glitch
+        if len(df) > 1 and df["time"].iloc[0] > df["time"].iloc[1]:
+            df = df.iloc[1:]
+
+        df = df.reset_index(drop=True)
+
         return df
 
-    # =====================================================
-    # HELPER: FIND CYCLES
-    # =====================================================
 
     def find_cycles(df):
 
@@ -1397,6 +1401,29 @@ def analyse_force_control_method(method_folder):
             cycle_ends[:min_len]
         ))
 
+
+    def detect_mad_outliers(values, threshold=4.0):
+
+        values = np.array(values)
+
+        if len(values) < 4:
+            return np.zeros(len(values), dtype=bool)
+
+        median = np.median(values)
+
+        mad = np.median(
+            np.abs(values - median)
+        )
+
+        if mad == 0:
+            return np.zeros(len(values), dtype=bool)
+
+        modified_z_score = (
+            0.6745 * (values - median) / mad
+        )
+
+        return np.abs(modified_z_score) > threshold
+
     # =====================================================
     # PROCESS EACH FILE
     # =====================================================
@@ -1418,10 +1445,7 @@ def analyse_force_control_method(method_folder):
 
         cycles = find_cycles(df)
 
-        steady_forces = []
-        in_cycle_stds = []
-        in_cycle_rms = []
-        in_cycle_pp = []
+        cycle_rows = []
 
         for cycle_number, (start, end) in enumerate(cycles, start=1):
 
@@ -1432,15 +1456,21 @@ def analyse_force_control_method(method_folder):
 
             max_force = cycle["force"].max()
 
-            steady_region = cycle[
-                cycle["force"] > STEADY_REGION_RATIO * max_force
-            ]
+            contact_len = len(cycle)
+
+            start_idx = int(0.15 * contact_len)
+            end_idx = int(0.45 * contact_len)
+
+            steady_region = cycle.iloc[start_idx:end_idx]
+
+            # steady_region = cycle[
+            #     cycle["force"] > STEADY_REGION_RATIO * max_force
+            # ]
 
             if len(steady_region) < 3:
                 steady_region = cycle
 
             steady_force = steady_region["force"].mean()
-
             steady_std = steady_region["force"].std()
 
             steady_rms = np.sqrt(
@@ -1461,12 +1491,7 @@ def analyse_force_control_method(method_folder):
                 steady_error / target_force
             ) * 100
 
-            steady_forces.append(steady_force)
-            in_cycle_stds.append(steady_std)
-            in_cycle_rms.append(steady_rms)
-            in_cycle_pp.append(steady_pp)
-
-            all_cycles.append({
+            cycle_rows.append({
 
                 "Method": method_name,
                 "File": file,
@@ -1482,21 +1507,56 @@ def analyse_force_control_method(method_folder):
                 "In-Cycle Peak-to-Peak (N)": steady_pp
             })
 
-        if len(steady_forces) == 0:
+        if len(cycle_rows) == 0:
             continue
 
-        steady_forces = np.array(steady_forces)
+        cycle_df = pd.DataFrame(cycle_rows)
+
+        # =================================================
+        # OUTLIER REJECTION BASED ON STEADY FORCE
+        # =================================================
+
+        if reject_outliers:
+
+            outlier_mask = detect_mad_outliers(
+                cycle_df["Steady Force (N)"].values,
+                threshold=mad_threshold
+            )
+
+        else:
+
+            outlier_mask = np.zeros(
+                len(cycle_df),
+                dtype=bool
+            )
+
+        cycle_df["Outlier Rejected"] = outlier_mask
+
+        all_cycles.extend(
+            cycle_df.to_dict("records")
+        )
+
+        filtered_df = cycle_df[
+            cycle_df["Outlier Rejected"] == False
+        ].copy()
+
+        if len(filtered_df) == 0:
+            continue
+
+        steady_forces = filtered_df[
+            "Steady Force (N)"
+        ].values
 
         mean_steady = np.mean(steady_forces)
 
         steady_repeatability_std = np.std(
             steady_forces,
             ddof=1
-        )
+        ) if len(steady_forces) > 1 else np.nan
 
         steady_repeatability_cv = (
             steady_repeatability_std / mean_steady
-        ) * 100
+        ) * 100 if mean_steady != 0 else np.nan
 
         steady_abs_error = mean_steady - target_force
 
@@ -1510,17 +1570,24 @@ def analyse_force_control_method(method_folder):
             )
         )
 
-        drift_slope = np.polyfit(
-            range(1, len(steady_forces) + 1),
-            steady_forces,
-            1
-        )[0]
+        if len(steady_forces) > 1:
+            drift_slope = np.polyfit(
+                range(1, len(steady_forces) + 1),
+                steady_forces,
+                1
+            )[0]
+        else:
+            drift_slope = np.nan
 
         test_summaries.append({
 
             "Method": method_name,
             "File": file,
             "Target Force (N)": target_force,
+
+            "Cycles Analysed Raw": len(cycle_df),
+            "Cycles Used After Outlier Rejection": len(filtered_df),
+            "Cycles Rejected": int(outlier_mask.sum()),
 
             "Mean Steady Force (N)": mean_steady,
             "Steady Absolute Error (N)": steady_abs_error,
@@ -1530,9 +1597,17 @@ def analyse_force_control_method(method_folder):
             "Steady Repeatability CV (%)": steady_repeatability_cv,
             "Steady RMS Across Cycles (N)": steady_rms_across_cycles,
 
-            "Mean In-Cycle STD (N)": np.mean(in_cycle_stds),
-            "Mean In-Cycle RMS Error (N)": np.mean(in_cycle_rms),
-            "Mean In-Cycle Peak-to-Peak (N)": np.mean(in_cycle_pp),
+            "Mean In-Cycle STD (N)": filtered_df[
+                "In-Cycle STD (N)"
+            ].mean(),
+
+            "Mean In-Cycle RMS Error (N)": filtered_df[
+                "In-Cycle RMS Error (N)"
+            ].mean(),
+
+            "Mean In-Cycle Peak-to-Peak (N)": filtered_df[
+                "In-Cycle Peak-to-Peak (N)"
+            ].mean(),
 
             "Drift Slope (N/cycle)": drift_slope
         })
@@ -1543,15 +1618,36 @@ def analyse_force_control_method(method_folder):
 
         plt.figure(figsize=(7, 5))
 
+        normal_cycles = cycle_df[
+            cycle_df["Outlier Rejected"] == False
+        ]
+
+        outlier_cycles = cycle_df[
+            cycle_df["Outlier Rejected"] == True
+        ]
+
         plt.plot(
-            range(1, len(steady_forces) + 1),
-            steady_forces,
-            marker="o"
+            normal_cycles["Cycle"],
+            normal_cycles["Steady Force (N)"],
+            marker="o",
+            label="Used cycles"
         )
+
+        if len(outlier_cycles) > 0:
+
+            plt.scatter(
+                outlier_cycles["Cycle"],
+                outlier_cycles["Steady Force (N)"],
+                color = "red",
+                marker="x",
+                s=100,
+                label="Rejected outlier"
+            )
 
         plt.axhline(
             target_force,
-            linestyle="--"
+            linestyle="--",
+            label="Target force"
         )
 
         plt.xlabel("Cycle Number")
@@ -1559,6 +1655,7 @@ def analyse_force_control_method(method_folder):
         plt.title(
             f"{method_name}: {int(target_force)}N steady force per cycle"
         )
+        plt.legend()
 
         plt.tight_layout()
 
@@ -1577,7 +1674,6 @@ def analyse_force_control_method(method_folder):
     # =====================================================
 
     all_cycles_df = pd.DataFrame(all_cycles)
-
     test_summary_df = pd.DataFrame(test_summaries)
 
     if len(test_summary_df) == 0:
@@ -1586,6 +1682,10 @@ def analyse_force_control_method(method_folder):
     force_summary_df = test_summary_df.groupby(
         "Target Force (N)"
     ).agg({
+
+        "Cycles Analysed Raw": "sum",
+        "Cycles Used After Outlier Rejection": "sum",
+        "Cycles Rejected": "sum",
 
         "Mean Steady Force (N)": "mean",
         "Steady Absolute Error (N)": "mean",
@@ -1669,7 +1769,6 @@ def analyse_force_control_method(method_folder):
 
         plt.close()
 
-    # target vs measured
     plt.figure(figsize=(7, 5))
 
     plt.plot(
@@ -1750,11 +1849,12 @@ def analyse_force_control_method(method_folder):
 
     return output_excel
 
-def compare_force_control_methods(master_folder):
 
-    import os
-    import pandas as pd
-    import matplotlib.pyplot as plt
+def compare_force_control_methods(
+    master_folder,
+    reject_outliers=True,
+    mad_threshold=4.0
+):
 
     method_folders = sorted([
         f for f in os.listdir(master_folder)
@@ -1771,7 +1871,9 @@ def compare_force_control_methods(master_folder):
         method_path = os.path.join(master_folder, method)
 
         excel_path = analyse_force_control_method(
-            method_path
+            method_path,
+            reject_outliers=reject_outliers,
+            mad_threshold=mad_threshold
         )
 
         summary_df = pd.read_excel(
@@ -1884,6 +1986,627 @@ def compare_force_control_methods(master_folder):
     print(f"Saved steady force-control method comparison:\n{output_excel}")
 
     return output_excel
+
+# def analyse_force_control_method(method_folder):
+
+#     import os
+#     import pandas as pd
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+
+#     FORCE_THRESHOLD = 0.5
+#     MIN_CYCLE_POINTS = 5
+#     STEADY_REGION_RATIO = 0.8
+
+#     method_name = os.path.basename(method_folder)
+
+#     all_cycles = []
+#     test_summaries = []
+
+#     csv_files = sorted([
+#         f for f in os.listdir(method_folder)
+#         if f.endswith(".csv")
+#         and "_analysis" not in f
+#         and "_analysed" not in f
+#     ])
+
+#     if len(csv_files) == 0:
+#         raise ValueError("No CSV files found.")
+
+#     # =====================================================
+#     # HELPER: READ TARGET FORCE
+#     # =====================================================
+
+#     def read_target_force(file_path):
+
+#         target_force = None
+
+#         with open(file_path, "r") as f:
+
+#             for line in f:
+
+#                 if "# Target Force (N)" in line:
+
+#                     parts = line.strip().split(",")
+
+#                     if len(parts) >= 2:
+#                         try:
+#                             target_force = float(parts[1])
+#                         except:
+#                             pass
+
+#                 if "time" in line.lower():
+#                     break
+
+#         return target_force
+
+#     # =====================================================
+#     # HELPER: LOAD DATA
+#     # =====================================================
+
+#     def load_force_data(file_path):
+
+#         data_start = 0
+
+#         with open(file_path, "r") as f:
+
+#             for i, line in enumerate(f):
+
+#                 line = line.strip()
+
+#                 if not line:
+#                     continue
+
+#                 if line.startswith("#"):
+#                     continue
+
+#                 if "time" in line.lower():
+#                     continue
+
+#                 data_start = i
+#                 break
+
+#         df = pd.read_csv(
+#             file_path,
+#             sep=r"[\s,\t]+",
+#             engine="python",
+#             skiprows=data_start,
+#             header=None
+#         )
+
+#         df = df.iloc[:, :2]
+#         df.columns = ["time", "force"]
+
+#         df["time"] = pd.to_numeric(df["time"], errors="coerce")
+#         df["force"] = pd.to_numeric(df["force"], errors="coerce")
+
+#         df = df.dropna()
+
+#         return df
+
+#     # =====================================================
+#     # HELPER: FIND CYCLES
+#     # =====================================================
+
+#     def find_cycles(df):
+
+#         df = df.copy()
+
+#         df["contact"] = df["force"] > FORCE_THRESHOLD
+#         df["contact_shift"] = df["contact"].shift(1).fillna(False)
+
+#         cycle_starts = df[
+#             (df["contact"] == True)
+#             &
+#             (df["contact_shift"] == False)
+#         ].index.tolist()
+
+#         cycle_ends = df[
+#             (df["contact"] == False)
+#             &
+#             (df["contact_shift"] == True)
+#         ].index.tolist()
+
+#         if len(cycle_starts) == 0 or len(cycle_ends) == 0:
+#             return []
+
+#         if cycle_ends[0] < cycle_starts[0]:
+#             cycle_ends.pop(0)
+
+#         min_len = min(len(cycle_starts), len(cycle_ends))
+
+#         return list(zip(
+#             cycle_starts[:min_len],
+#             cycle_ends[:min_len]
+#         ))
+
+#     # =====================================================
+#     # PROCESS EACH FILE
+#     # =====================================================
+
+#     for file in csv_files:
+
+#         file_path = os.path.join(method_folder, file)
+
+#         target_force = read_target_force(file_path)
+
+#         if target_force is None:
+#             print(f"Skipping {file}: no target force found.")
+#             continue
+
+#         df = load_force_data(file_path)
+
+#         if len(df) == 0:
+#             continue
+
+#         cycles = find_cycles(df)
+
+#         steady_forces = []
+#         in_cycle_stds = []
+#         in_cycle_rms = []
+#         in_cycle_pp = []
+
+#         for cycle_number, (start, end) in enumerate(cycles, start=1):
+
+#             cycle = df.loc[start:end]
+
+#             if len(cycle) < MIN_CYCLE_POINTS:
+#                 continue
+
+#             max_force = cycle["force"].max()
+
+#             steady_region = cycle[
+#                 cycle["force"] > STEADY_REGION_RATIO * max_force
+#             ]
+
+#             if len(steady_region) < 3:
+#                 steady_region = cycle
+
+#             steady_force = steady_region["force"].mean()
+
+#             steady_std = steady_region["force"].std()
+
+#             steady_rms = np.sqrt(
+#                 np.mean(
+#                     (steady_region["force"] - target_force) ** 2
+#                 )
+#             )
+
+#             steady_pp = (
+#                 steady_region["force"].max()
+#                 -
+#                 steady_region["force"].min()
+#             )
+
+#             steady_error = steady_force - target_force
+
+#             steady_percent_error = (
+#                 steady_error / target_force
+#             ) * 100
+
+#             steady_forces.append(steady_force)
+#             in_cycle_stds.append(steady_std)
+#             in_cycle_rms.append(steady_rms)
+#             in_cycle_pp.append(steady_pp)
+
+#             all_cycles.append({
+
+#                 "Method": method_name,
+#                 "File": file,
+#                 "Target Force (N)": target_force,
+#                 "Cycle": cycle_number,
+
+#                 "Steady Force (N)": steady_force,
+#                 "Steady Absolute Error (N)": steady_error,
+#                 "Steady Percent Error (%)": steady_percent_error,
+
+#                 "In-Cycle STD (N)": steady_std,
+#                 "In-Cycle RMS Error (N)": steady_rms,
+#                 "In-Cycle Peak-to-Peak (N)": steady_pp
+#             })
+
+#         if len(steady_forces) == 0:
+#             continue
+
+#         steady_forces = np.array(steady_forces)
+
+#         mean_steady = np.mean(steady_forces)
+
+#         steady_repeatability_std = np.std(
+#             steady_forces,
+#             ddof=1
+#         )
+
+#         steady_repeatability_cv = (
+#             steady_repeatability_std / mean_steady
+#         ) * 100
+
+#         steady_abs_error = mean_steady - target_force
+
+#         steady_pct_error = (
+#             steady_abs_error / target_force
+#         ) * 100
+
+#         steady_rms_across_cycles = np.sqrt(
+#             np.mean(
+#                 (steady_forces - target_force) ** 2
+#             )
+#         )
+
+#         drift_slope = np.polyfit(
+#             range(1, len(steady_forces) + 1),
+#             steady_forces,
+#             1
+#         )[0]
+
+#         test_summaries.append({
+
+#             "Method": method_name,
+#             "File": file,
+#             "Target Force (N)": target_force,
+
+#             "Mean Steady Force (N)": mean_steady,
+#             "Steady Absolute Error (N)": steady_abs_error,
+#             "Steady Percent Error (%)": steady_pct_error,
+
+#             "Steady Repeatability STD (N)": steady_repeatability_std,
+#             "Steady Repeatability CV (%)": steady_repeatability_cv,
+#             "Steady RMS Across Cycles (N)": steady_rms_across_cycles,
+
+#             "Mean In-Cycle STD (N)": np.mean(in_cycle_stds),
+#             "Mean In-Cycle RMS Error (N)": np.mean(in_cycle_rms),
+#             "Mean In-Cycle Peak-to-Peak (N)": np.mean(in_cycle_pp),
+
+#             "Drift Slope (N/cycle)": drift_slope
+#         })
+
+#         # =================================================
+#         # PLOT: STEADY FORCE VS CYCLE
+#         # =================================================
+
+#         plt.figure(figsize=(7, 5))
+
+#         plt.plot(
+#             range(1, len(steady_forces) + 1),
+#             steady_forces,
+#             marker="o"
+#         )
+
+#         plt.axhline(
+#             target_force,
+#             linestyle="--"
+#         )
+
+#         plt.xlabel("Cycle Number")
+#         plt.ylabel("Steady Force (N)")
+#         plt.title(
+#             f"{method_name}: {int(target_force)}N steady force per cycle"
+#         )
+
+#         plt.tight_layout()
+
+#         plt.savefig(
+#             os.path.join(
+#                 method_folder,
+#                 f"{method_name}_{int(target_force)}N_steady_force_vs_cycle.png"
+#             ),
+#             dpi=300
+#         )
+
+#         plt.close()
+
+#     # =====================================================
+#     # CREATE DATAFRAMES
+#     # =====================================================
+
+#     all_cycles_df = pd.DataFrame(all_cycles)
+
+#     test_summary_df = pd.DataFrame(test_summaries)
+
+#     if len(test_summary_df) == 0:
+#         raise ValueError("No valid force-control data found.")
+
+#     force_summary_df = test_summary_df.groupby(
+#         "Target Force (N)"
+#     ).agg({
+
+#         "Mean Steady Force (N)": "mean",
+#         "Steady Absolute Error (N)": "mean",
+#         "Steady Percent Error (%)": "mean",
+
+#         "Steady Repeatability STD (N)": "mean",
+#         "Steady Repeatability CV (%)": "mean",
+#         "Steady RMS Across Cycles (N)": "mean",
+
+#         "Mean In-Cycle STD (N)": "mean",
+#         "Mean In-Cycle RMS Error (N)": "mean",
+#         "Mean In-Cycle Peak-to-Peak (N)": "mean",
+
+#         "Drift Slope (N/cycle)": "mean"
+
+#     }).reset_index()
+
+#     force_summary_df = force_summary_df.sort_values(
+#         "Target Force (N)"
+#     )
+
+#     # =====================================================
+#     # SAVE EXCEL
+#     # =====================================================
+
+#     output_excel = os.path.join(
+#         method_folder,
+#         f"{method_name}_STEADY_FORCE_CONTROL_ANALYSIS.xlsx"
+#     )
+
+#     with pd.ExcelWriter(
+#         output_excel,
+#         engine="openpyxl"
+#     ) as writer:
+
+#         all_cycles_df.to_excel(
+#             writer,
+#             sheet_name="ALL_CYCLES",
+#             index=False
+#         )
+
+#         test_summary_df.to_excel(
+#             writer,
+#             sheet_name="TEST_SUMMARY",
+#             index=False
+#         )
+
+#         force_summary_df.to_excel(
+#             writer,
+#             sheet_name="FORCE_SUMMARY",
+#             index=False
+#         )
+
+#     # =====================================================
+#     # SUMMARY PLOTS
+#     # =====================================================
+
+#     def plot_summary(y_col, ylabel, title, filename, zero_line=False):
+
+#         plt.figure(figsize=(7, 5))
+
+#         plt.plot(
+#             force_summary_df["Target Force (N)"],
+#             force_summary_df[y_col],
+#             marker="o"
+#         )
+
+#         if zero_line:
+#             plt.axhline(0, linestyle="--")
+
+#         plt.xlabel("Target Force (N)")
+#         plt.ylabel(ylabel)
+#         plt.title(title)
+
+#         plt.tight_layout()
+
+#         plt.savefig(
+#             os.path.join(method_folder, filename),
+#             dpi=300
+#         )
+
+#         plt.close()
+
+#     # target vs measured
+#     plt.figure(figsize=(7, 5))
+
+#     plt.plot(
+#         force_summary_df["Target Force (N)"],
+#         force_summary_df["Mean Steady Force (N)"],
+#         marker="o",
+#         label="Measured"
+#     )
+
+#     plt.plot(
+#         force_summary_df["Target Force (N)"],
+#         force_summary_df["Target Force (N)"],
+#         linestyle="--",
+#         label="Target"
+#     )
+
+#     plt.xlabel("Target Force (N)")
+#     plt.ylabel("Force (N)")
+#     plt.title(f"{method_name}: target vs mean steady force")
+#     plt.legend()
+
+#     plt.tight_layout()
+
+#     plt.savefig(
+#         os.path.join(
+#             method_folder,
+#             f"{method_name}_target_vs_mean_steady_force.png"
+#         ),
+#         dpi=300
+#     )
+
+#     plt.close()
+
+#     plot_summary(
+#         "Steady Percent Error (%)",
+#         "Steady Force Error (%)",
+#         f"{method_name}: steady-force accuracy",
+#         f"{method_name}_steady_percent_error.png",
+#         zero_line=True
+#     )
+
+#     plot_summary(
+#         "Steady Repeatability STD (N)",
+#         "STD of Steady Force Across Cycles (N)",
+#         f"{method_name}: steady-force repeatability STD",
+#         f"{method_name}_steady_repeatability_std.png"
+#     )
+
+#     plot_summary(
+#         "Steady Repeatability CV (%)",
+#         "CV of Steady Force Across Cycles (%)",
+#         f"{method_name}: steady-force repeatability CV",
+#         f"{method_name}_steady_repeatability_cv.png"
+#     )
+
+#     plot_summary(
+#         "Mean In-Cycle STD (N)",
+#         "Mean In-Cycle STD (N)",
+#         f"{method_name}: in-cycle stability",
+#         f"{method_name}_in_cycle_std.png"
+#     )
+
+#     plot_summary(
+#         "Mean In-Cycle RMS Error (N)",
+#         "Mean In-Cycle RMS Error (N)",
+#         f"{method_name}: in-cycle RMS error",
+#         f"{method_name}_in_cycle_rms.png"
+#     )
+
+#     plot_summary(
+#         "Mean In-Cycle Peak-to-Peak (N)",
+#         "Mean In-Cycle Peak-to-Peak (N)",
+#         f"{method_name}: in-cycle peak-to-peak variation",
+#         f"{method_name}_in_cycle_peak_to_peak.png"
+#     )
+
+#     print(f"Saved steady force-control analysis:\n{output_excel}")
+
+#     return output_excel
+
+# def compare_force_control_methods(master_folder):
+
+#     import os
+#     import pandas as pd
+#     import matplotlib.pyplot as plt
+
+#     method_folders = sorted([
+#         f for f in os.listdir(master_folder)
+#         if os.path.isdir(os.path.join(master_folder, f))
+#     ])
+
+#     if len(method_folders) == 0:
+#         raise ValueError("No method folders found.")
+
+#     all_summaries = []
+
+#     for method in method_folders:
+
+#         method_path = os.path.join(master_folder, method)
+
+#         excel_path = analyse_force_control_method(
+#             method_path
+#         )
+
+#         summary_df = pd.read_excel(
+#             excel_path,
+#             sheet_name="FORCE_SUMMARY"
+#         )
+
+#         summary_df["Method"] = method
+
+#         all_summaries.append(summary_df)
+
+#     combined_df = pd.concat(
+#         all_summaries,
+#         ignore_index=True
+#     )
+
+#     output_excel = os.path.join(
+#         master_folder,
+#         "STEADY_FORCE_CONTROL_METHOD_COMPARISON.xlsx"
+#     )
+
+#     with pd.ExcelWriter(
+#         output_excel,
+#         engine="openpyxl"
+#     ) as writer:
+
+#         combined_df.to_excel(
+#             writer,
+#             sheet_name="ALL_METHODS",
+#             index=False
+#         )
+
+#     def plot_comparison(y_col, ylabel, title, filename, zero_line=False):
+
+#         plt.figure(figsize=(8, 6))
+
+#         for method in sorted(combined_df["Method"].unique()):
+
+#             subset = combined_df[
+#                 combined_df["Method"] == method
+#             ].sort_values("Target Force (N)")
+
+#             plt.plot(
+#                 subset["Target Force (N)"],
+#                 subset[y_col],
+#                 marker="o",
+#                 label=method
+#             )
+
+#         if zero_line:
+#             plt.axhline(0, linestyle="--")
+
+#         plt.xlabel("Target Force (N)")
+#         plt.ylabel(ylabel)
+#         plt.title(title)
+#         plt.legend(title="Control Method")
+
+#         plt.tight_layout()
+
+#         plt.savefig(
+#             os.path.join(master_folder, filename),
+#             dpi=300
+#         )
+
+#         plt.close()
+
+#     plot_comparison(
+#         "Steady Percent Error (%)",
+#         "Steady Force Error (%)",
+#         "Steady-force accuracy comparison",
+#         "comparison_steady_percent_error.png",
+#         zero_line=True
+#     )
+
+#     plot_comparison(
+#         "Steady Repeatability STD (N)",
+#         "STD of Steady Force Across Cycles (N)",
+#         "Steady-force repeatability STD comparison",
+#         "comparison_steady_repeatability_std.png"
+#     )
+
+#     plot_comparison(
+#         "Steady Repeatability CV (%)",
+#         "CV of Steady Force Across Cycles (%)",
+#         "Steady-force repeatability CV comparison",
+#         "comparison_steady_repeatability_cv.png"
+#     )
+
+#     plot_comparison(
+#         "Mean In-Cycle STD (N)",
+#         "Mean In-Cycle STD (N)",
+#         "In-cycle stability comparison",
+#         "comparison_in_cycle_std.png"
+#     )
+
+#     plot_comparison(
+#         "Mean In-Cycle RMS Error (N)",
+#         "Mean In-Cycle RMS Error (N)",
+#         "In-cycle RMS error comparison",
+#         "comparison_in_cycle_rms.png"
+#     )
+
+#     plot_comparison(
+#         "Mean In-Cycle Peak-to-Peak (N)",
+#         "Mean In-Cycle Peak-to-Peak (N)",
+#         "In-cycle peak-to-peak comparison",
+#         "comparison_in_cycle_peak_to_peak.png"
+#     )
+
+#     print(f"Saved steady force-control method comparison:\n{output_excel}")
+
+#     return output_excel
 
 def analyse_voltage_cycle_convergence(
     folder_path,
@@ -2481,13 +3204,13 @@ def plot_force_voltage_vs_time(file_path):
     # PLOT
     # =========================
 
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    fig, ax1 = plt.subplots(figsize=(25, 10))
 
     ax1.plot(
         df["time"],
         df["force"],
         color="red",
-        linestyle="--",
+        # linestyle="--",
         label="Force"
     )
 
@@ -2501,6 +3224,7 @@ def plot_force_voltage_vs_time(file_path):
         df["time"],
         df["voltage"],
         color="blue",
+        linestyle="dotted",
         label="Voltage"
     )
 
