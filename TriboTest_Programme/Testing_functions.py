@@ -352,9 +352,9 @@ def contact_cycle():
         send_gcode("M400") # waits for printer to finish moving
 
 
-        # time.sleep(initial_wait) # short delay to allow force to update after contact
-        scaled_delay = contact_force/500 # scales the initial wait time based on the target force (higher forces may need a slightly longer delay to stabilize)
-        time.sleep(scaled_delay)
+        time.sleep(initial_wait) # short delay to allow force to update after contact
+        # scaled_delay = contact_force/500 # scales the initial wait time based on the target force (higher forces may need a slightly longer delay to stabilize)
+        # time.sleep(scaled_delay)
 
         while time.time() - cycle_start_time < (0.65* cycle_time):
             correct_z_for_force() # actively holds correct force during the set contact time   
