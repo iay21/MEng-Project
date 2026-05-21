@@ -34,7 +34,7 @@ void loop()
 
   Serial.println(force);
   //Serial.println("reading");
-  delay(5);
+  delay(1);
 }
 
 
