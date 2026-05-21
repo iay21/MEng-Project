@@ -80,7 +80,7 @@ def analyse_force_control_method_gui():
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
-def compare_force_control_methods_gui():
+def compare_force_control_methods_simple_gui():
 
     folder_path = filedialog.askdirectory(
         title="Select force-control master folder"
@@ -90,7 +90,7 @@ def compare_force_control_methods_gui():
         return
 
     try:
-        Processing_functions.compare_force_control_methods(folder_path)
+        Processing_functions.compare_force_control_methods_simple(folder_path)
 
         messagebox.showinfo(
             "Success",
@@ -583,10 +583,10 @@ tk.Button(
 
 tk.Button(
     rig_frame,
-    text="3b - Compare Force-Control Methods",
+    text="3b - Compare Force-Control Methods SIMPLE",
     width=30,
     height=2,
-    command=compare_force_control_methods_gui
+    command=compare_force_control_methods_simple_gui
 ).grid(row=3, column=0, pady=5, sticky="ew")
 
 tk.Button(

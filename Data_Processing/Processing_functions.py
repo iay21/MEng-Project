@@ -1288,24 +1288,22 @@ def analyse_force_control_method(method_folder):
                 target_force,
             )
 
-            # contact_len = len(cycle)
-
-            # steady_start_i = int(steady_start_fraction * contact_len)
-            # steady_end_i = int(steady_end_fraction * contact_len)
-
-            # if steady_end_i <= steady_start_i:
-            #     continue
-
-            # steady_region = cycle.iloc[steady_start_i:steady_end_i]
-
-            # if len(steady_region) < 3:
-            #     continue
-
-            # steady_start_time = steady_region["time"].iloc[0]
-            # steady_end_time = steady_region["time"].iloc[-1]
-
             steady_force = steady_region["force"].mean()
             steady_std = steady_region["force"].std()
+
+            steady_duration = steady_end_time - steady_start_time
+            steady_points = len(steady_region)
+
+
+            in_cycle_rms_about_mean = np.sqrt(
+                np.mean(
+                    (steady_region["force"] - steady_force) ** 2
+                )
+            )
+
+            in_cycle_mean_abs_deviation = np.mean(
+                np.abs(steady_region["force"] - steady_force)
+            )
 
             steady_rms = np.sqrt(
                 np.mean(
@@ -1343,7 +1341,12 @@ def analyse_force_control_method(method_folder):
 
                 "In-Cycle STD (N)": steady_std,
                 "In-Cycle RMS Error (N)": steady_rms,
-                "In-Cycle Peak-to-Peak (N)": steady_pp
+                "In-Cycle Peak-to-Peak (N)": steady_pp,
+
+                "Steady Duration (s)": steady_duration,
+                "Steady Points": steady_points,
+                "In-Cycle RMS About Mean (N)": in_cycle_rms_about_mean,
+                "In-Cycle Mean Abs Deviation (N)": in_cycle_mean_abs_deviation,
             })
 
             steady_regions_for_debug.append(
@@ -1434,7 +1437,19 @@ def analyse_force_control_method(method_folder):
                 "In-Cycle Peak-to-Peak (N)"
             ].mean(),
 
-            "Drift Slope (N/cycle)": drift_slope
+            "Drift Slope (N/cycle)": drift_slope,
+
+            "Mean Steady Duration (s)": filtered_df["Steady Duration (s)"].mean(),
+            "Steady Duration STD (s)": filtered_df["Steady Duration (s)"].std(),
+            "Mean Steady Points": filtered_df["Steady Points"].mean(),
+
+            "Mean In-Cycle RMS About Mean (N)": filtered_df[
+                "In-Cycle RMS About Mean (N)"
+            ].mean(),
+
+            "Mean In-Cycle Mean Abs Deviation (N)": filtered_df[
+                "In-Cycle Mean Abs Deviation (N)"
+            ].mean(),
         })
 
         # =================================================
@@ -1576,7 +1591,13 @@ def analyse_force_control_method(method_folder):
         "Mean In-Cycle RMS Error (N)": "mean",
         "Mean In-Cycle Peak-to-Peak (N)": "mean",
 
-        "Drift Slope (N/cycle)": "mean"
+        "Drift Slope (N/cycle)": "mean",
+
+        "Mean Steady Duration (s)": "mean",
+        "Steady Duration STD (s)": "mean",
+        "Mean Steady Points": "mean",
+        "Mean In-Cycle RMS About Mean (N)": "mean",
+        "Mean In-Cycle Mean Abs Deviation (N)": "mean",
 
     }).reset_index()
 
@@ -1714,14 +1735,249 @@ def analyse_force_control_method(method_folder):
         f"{method_name}_in_cycle_peak_to_peak.png"
     )
 
+    plot_summary(
+    "Mean In-Cycle RMS About Mean (N)",
+    "Mean In-Cycle RMS About Mean (N)",
+    f"{method_name}: offset-independent in-cycle stability",
+    f"{method_name}_in_cycle_rms_about_mean.png"
+    )
+
+    plot_summary(
+        "Mean Steady Duration (s)",
+        "Mean Steady Duration (s)",
+        f"{method_name}: steady-region duration",
+        f"{method_name}_steady_duration.png"
+    )
+
+    plot_summary(
+        "Mean Steady Points",
+        "Mean Steady Points",
+        f"{method_name}: steady-region points",
+        f"{method_name}_steady_points.png"
+    )
+    
     print(f"Saved steady force-control analysis:\n{output_excel}")
 
     return output_excel
 
+
+def compare_force_control_methods_simple(master_folder):
+    import os
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    method_folders = sorted([
+        f for f in os.listdir(master_folder)
+        if os.path.isdir(os.path.join(master_folder, f))
+    ])
+
+    if len(method_folders) == 0:
+        raise ValueError("No method folders found.")
+
+    all_summaries = []
+
+    for method in method_folders:
+        method_path = os.path.join(master_folder, method)
+
+        excel_path = analyse_force_control_method(method_path)
+
+        summary_df = pd.read_excel(
+            excel_path,
+            sheet_name="FORCE_SUMMARY"
+        )
+
+        summary_df["Method"] = method
+        all_summaries.append(summary_df)
+
+    combined_df = pd.concat(all_summaries, ignore_index=True)
+
+    # =========================
+    # SIMPLIFIED SCORE
+    # =========================
+    # Lower is better for all these metrics
+
+    scoring_metrics = [
+        "Steady Repeatability CV (%)",
+        "Mean In-Cycle STD (N)",
+        "Steady Percent Error (%)"
+    ]
+
+    combined_df["Abs Steady Percent Error (%)"] = (
+        combined_df["Steady Percent Error (%)"].abs()
+    )
+
+    scoring_metrics = [
+        "Steady Repeatability CV (%)",
+        "Mean In-Cycle STD (N)",
+        "Abs Steady Percent Error (%)"
+    ]
+
+    # Normalise each metric so they can be combined fairly
+    for metric in scoring_metrics:
+        min_val = combined_df[metric].min()
+        max_val = combined_df[metric].max()
+
+        if max_val == min_val:
+            combined_df[f"{metric} Normalised"] = 0
+        else:
+            combined_df[f"{metric} Normalised"] = (
+                (combined_df[metric] - min_val)
+                /
+                (max_val - min_val)
+            )
+
+    # Weighted score:
+    # repeatability matters most,
+    # then in-cycle stability,
+    # then accuracy
+    combined_df["Simple Control Score"] = (
+        0.50 * combined_df["Steady Repeatability CV (%) Normalised"]
+        +
+        0.35 * combined_df["Mean In-Cycle STD (N) Normalised"]
+        +
+        0.15 * combined_df["Abs Steady Percent Error (%) Normalised"]
+    )
+
+    # Summary score per method
+    method_ranking = (
+        combined_df
+        .groupby("Method")
+        .agg({
+            "Simple Control Score": "mean",
+            "Steady Repeatability CV (%)": "mean",
+            "Mean In-Cycle STD (N)": "mean",
+            "Abs Steady Percent Error (%)": "mean"
+        })
+        .reset_index()
+        .sort_values("Simple Control Score")
+    )
+
+    # =========================
+    # SAVE EXCEL
+    # =========================
+
+    output_excel = os.path.join(
+        master_folder,
+        "SIMPLE_FORCE_CONTROL_METHOD_COMPARISON.xlsx"
+    )
+
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+        combined_df.to_excel(
+            writer,
+            sheet_name="ALL_METHODS",
+            index=False
+        )
+
+        method_ranking.to_excel(
+            writer,
+            sheet_name="METHOD_RANKING",
+            index=False
+        )
+
+    # =========================
+    # PLOTTING HELPER
+    # =========================
+
+    def plot_comparison(y_col, ylabel, title, filename, zero_line=False):
+        plt.figure(figsize=(8, 6))
+
+        for method in sorted(combined_df["Method"].unique()):
+            subset = combined_df[
+                combined_df["Method"] == method
+            ].sort_values("Target Force (N)")
+
+            plt.plot(
+                subset["Target Force (N)"],
+                subset[y_col],
+                marker="o",
+                label=method
+            )
+
+        if zero_line:
+            plt.axhline(0, linestyle="--")
+
+        plt.xlabel("Target Force (N)")
+        plt.ylabel(ylabel)
+        plt.title(title)
+        plt.legend(title="Control Method")
+        plt.tight_layout()
+
+        plt.savefig(
+            os.path.join(master_folder, filename),
+            dpi=300
+        )
+
+        plt.close()
+
+    # =========================
+    # CORE COMPARISON PLOTS
+    # =========================
+
+    plot_comparison(
+        "Steady Repeatability CV (%)",
+        "Repeatability CV (%)",
+        "1. Cycle-to-cycle repeatability",
+        "simple_1_repeatability_cv.png"
+    )
+
+    plot_comparison(
+        "Mean In-Cycle STD (N)",
+        "Mean In-Cycle STD (N)",
+        "2. In-cycle force stability",
+        "simple_2_in_cycle_stability.png"
+    )
+
+    plot_comparison(
+        "Steady Percent Error (%)",
+        "Steady Force Error (%)",
+        "3. Accuracy relative to target",
+        "simple_3_accuracy.png",
+        zero_line=True
+    )
+
+    plot_comparison(
+        "Simple Control Score",
+        "Simple Control Score",
+        "Overall control score, lower is better",
+        "simple_4_overall_score.png"
+    )
+
+    # =========================
+    # METHOD RANKING BAR CHART
+    # =========================
+
+    plt.figure(figsize=(8, 5))
+
+    plt.bar(
+        method_ranking["Method"],
+        method_ranking["Simple Control Score"]
+    )
+
+    plt.xlabel("Control Method")
+    plt.ylabel("Mean Simple Control Score")
+    plt.title("Overall method ranking, lower is better")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(master_folder, "simple_5_method_ranking.png"),
+        dpi=300
+    )
+
+    plt.close()
+
+    print("Saved simplified force-control comparison:")
+    print(output_excel)
+
+    print("\nBest methods ranked:")
+    print(method_ranking)
+
+    return output_excel
+
+
 def compare_force_control_methods(
     master_folder,
-    reject_outliers=True,
-    mad_threshold=4.0
 ):
 
     method_folders = sorted([
@@ -1845,6 +2101,27 @@ def compare_force_control_methods(
         "Mean In-Cycle Peak-to-Peak (N)",
         "In-cycle peak-to-peak comparison",
         "comparison_in_cycle_peak_to_peak.png"
+    )
+
+    plot_comparison(
+    "Mean In-Cycle RMS About Mean (N)",
+    "In-Cycle RMS About Cycle Mean (N)",
+    "Offset-independent in-cycle stability comparison",
+    "comparison_in_cycle_rms_about_mean.png"
+    )
+
+    plot_comparison(
+        "Mean Steady Duration (s)",
+        "Mean Steady Duration (s)",
+        "Steady-region duration comparison",
+        "comparison_steady_duration.png"
+    )
+
+    plot_comparison(
+        "Mean Steady Points",
+        "Mean Number of Steady Points",
+        "Steady-region sample count comparison",
+        "comparison_steady_points.png"
     )
 
     print(f"Saved steady force-control method comparison:\n{output_excel}")
@@ -2541,9 +2818,10 @@ def load_force_data(file_path):
 
         return df
 
+contact_start_threshold=0.5
+contact_end_threshold=0.2
 
-def find_cycles(df, contact_start_threshold=0.5, contact_end_threshold=0.2):
-
+def find_cycles(df):
         cycles = []
         in_contact = False
         start_index = None
@@ -2587,60 +2865,470 @@ def detect_mad_outliers(values, threshold=4.0):
 def find_steady_force_region(
     cycle_df,
     target_force,
-    steady_force_tolerance=0.10,
-    max_steady_dfdt=2.0,
-    min_steady_points=3,
-    fallback_ratio=0.8
+    steady_force_tolerance=0.12,
+    max_steady_dfdt=45.0,
+    min_steady_points=2,
+    smoothing_window=3,
+    max_gap_points=2,
+    fallback_ratio=0.99,
+    start_padding_points=0
 ):
-
     import numpy as np
 
-    cycle = cycle_df.copy()
+    cycle = cycle_df.copy().reset_index(drop=True)
 
+    # -------------------------
+    # Smooth force slightly
+    # -------------------------
+    cycle["force_smooth"] = (
+        cycle["force"]
+        .rolling(
+            window=smoothing_window,
+            center=True,
+            min_periods=1
+        )
+        .mean()
+    )
+
+    # -------------------------
+    # Forward derivative
+    # Measures how force changes AFTER each point
+    # -------------------------
     cycle["dF_dt"] = (
-        cycle["force"].diff()
-        /
-        cycle["time"].diff()
+        cycle["force_smooth"].shift(-1) - cycle["force_smooth"]
+    ) / (
+        cycle["time"].shift(-1) - cycle["time"]
     )
 
-    cycle["dF_dt"] = cycle["dF_dt"].replace(
-        [np.inf, -np.inf],
-        np.nan
-    )
+    cycle["dF_dt"] = cycle["dF_dt"].replace([np.inf, -np.inf], np.nan)
+    cycle["dF_dt"] = cycle["dF_dt"].bfill().ffill()
 
+    # -------------------------
+    # Define target-force band
+    # -------------------------
     lower_force_limit = target_force * (1 - steady_force_tolerance)
     upper_force_limit = target_force * (1 + steady_force_tolerance)
 
-    steady_region = cycle[
-        (cycle["force"] >= lower_force_limit)
+    near_target = (
+        (cycle["force_smooth"] >= lower_force_limit)
         &
-        (cycle["force"] <= upper_force_limit)
-        &
-        (cycle["dF_dt"].abs() <= max_steady_dfdt)
-    ].copy()
+        (cycle["force_smooth"] <= upper_force_limit)
+    )
 
-    steady_method = "target_plus_dFdt"
+    # -------------------------
+    # Define low-slope region
+    # -------------------------
+    low_slope = cycle["dF_dt"].abs() <= max_steady_dfdt
 
-    if len(steady_region) < min_steady_points:
+    cycle["steady_candidate"] = near_target & low_slope
 
-        max_force = cycle["force"].max()
+    # -------------------------
+    # Fill small gaps caused by noise
+    # -------------------------
+    steady = cycle["steady_candidate"].copy()
+
+    for i in range(len(steady)):
+        if not steady.iloc[i]:
+            left_start = max(0, i - max_gap_points)
+            right_end = min(len(steady), i + max_gap_points + 1)
+
+            left_good = steady.iloc[left_start:i].any()
+            right_good = steady.iloc[i + 1:right_end].any()
+
+            if left_good and right_good:
+                steady.iloc[i] = True
+
+    cycle["steady_candidate"] = steady
+
+    # -------------------------
+    # Find continuous steady regions
+    # -------------------------
+    cycle["region_id"] = (
+        cycle["steady_candidate"] != cycle["steady_candidate"].shift()
+    ).cumsum()
+
+    valid_regions = []
+
+    for _, region in cycle.groupby("region_id"):
+        if region["steady_candidate"].iloc[0] and len(region) >= min_steady_points:
+            valid_regions.append(region)
+
+    # -------------------------
+    # Choose longest steady region
+    # -------------------------
+    if valid_regions:
+
+        steady_region = max(valid_regions, key=len).copy()
+        steady_method = "near_target_forward_dFdt_with_padding"
+
+        start_idx = steady_region.index[0]
+        end_idx = steady_region.index[-1]
+
+        # Move start slightly earlier to avoid over-conservative detection
+        start_idx = max(0, start_idx - start_padding_points)
+
+        steady_region = cycle.loc[start_idx:end_idx].copy()
+
+    else:
+        # -------------------------
+        # Fallback: use upper part of the force cycle
+        # -------------------------
+        max_force = cycle["force_smooth"].max()
 
         steady_region = cycle[
-            cycle["force"] > fallback_ratio * max_force
+            cycle["force_smooth"] >= fallback_ratio * max_force
         ].copy()
 
         steady_method = "fallback_top_force_region"
 
+    # -------------------------
+    # Final fallback
+    # -------------------------
     if len(steady_region) < min_steady_points:
-
         steady_region = cycle.copy()
-
         steady_method = "fallback_whole_cycle"
 
     steady_start_time = steady_region["time"].iloc[0]
     steady_end_time = steady_region["time"].iloc[-1]
 
     return steady_region, steady_method, steady_start_time, steady_end_time
+
+# def find_steady_force_region(
+#     cycle_df,
+#     target_force,
+#     steady_force_tolerance=0.15,
+#     max_steady_dfdt=45.0,
+#     min_steady_points=3,
+#     smoothing_window=4,
+#     max_gap_points=2,
+#     fallback_ratio=0.90,
+#     start_expand_lower_ratio=0.85,
+#     start_expand_upper_ratio=1.25
+# ):
+#     import numpy as np
+#     import pandas as pd
+
+#     cycle = cycle_df.copy().reset_index(drop=True)
+
+#     # -------------------------
+#     # Smooth force
+#     # -------------------------
+#     cycle["force_smooth"] = (
+#         cycle["force"]
+#         .rolling(
+#             window=smoothing_window,
+#             center=True,
+#             min_periods=1
+#         )
+#         .mean()
+#     )
+
+#     # -------------------------
+#     # Forward derivative
+#     # This checks what happens AFTER each point,
+#     # rather than penalising it for arriving quickly.
+#     # -------------------------
+#     cycle["dF_dt"] = (
+#         cycle["force_smooth"].shift(-1) - cycle["force_smooth"]
+#     ) / (
+#         cycle["time"].shift(-1) - cycle["time"]
+#     )
+
+#     cycle["dF_dt"] = cycle["dF_dt"].replace([np.inf, -np.inf], np.nan)
+#     cycle["dF_dt"] = cycle["dF_dt"].bfill().ffill()
+
+#     # -------------------------
+#     # Force limits
+#     # -------------------------
+#     lower_force_limit = target_force * (1 - steady_force_tolerance)
+#     upper_force_limit = target_force * (1 + steady_force_tolerance)
+
+#     # -------------------------
+#     # Normal steady condition
+#     # -------------------------
+#     near_target = (
+#         (cycle["force_smooth"] >= lower_force_limit)
+#         &
+#         (cycle["force_smooth"] <= upper_force_limit)
+#     )
+
+#     low_slope = cycle["dF_dt"].abs() <= max_steady_dfdt
+
+#     normal_steady = near_target & low_slope
+
+#     # -------------------------
+#     # Extra rule for start of plateau
+#     # Accept points that have just reached target force,
+#     # even if the derivative is still high.
+#     # -------------------------
+#     plateau_start = (
+#         (cycle["force_smooth"] >= target_force * start_expand_lower_ratio)
+#         &
+#         (cycle["force_smooth"] <= target_force * start_expand_upper_ratio)
+#         &
+#         (cycle["dF_dt"] > 0)
+#     )
+
+#     cycle["steady_candidate"] = normal_steady | plateau_start
+
+#     # -------------------------
+#     # Fill small gaps inside steady region
+#     # -------------------------
+#     steady = cycle["steady_candidate"].copy()
+
+#     for i in range(len(steady)):
+#         if not steady.iloc[i]:
+#             left_start = max(0, i - max_gap_points)
+#             right_end = min(len(steady), i + max_gap_points + 1)
+
+#             left_good = steady.iloc[left_start:i].any()
+#             right_good = steady.iloc[i + 1:right_end].any()
+
+#             if left_good and right_good:
+#                 steady.iloc[i] = True
+
+#     cycle["steady_candidate"] = steady
+
+#     # -------------------------
+#     # Find continuous steady regions
+#     # -------------------------
+#     cycle["region_id"] = (
+#         cycle["steady_candidate"] != cycle["steady_candidate"].shift()
+#     ).cumsum()
+
+#     valid_regions = []
+
+#     for _, region in cycle.groupby("region_id"):
+#         if region["steady_candidate"].iloc[0] and len(region) >= min_steady_points:
+#             valid_regions.append(region)
+
+#     # -------------------------
+#     # Choose longest valid region
+#     # -------------------------
+#     if valid_regions:
+#         steady_region = max(valid_regions, key=len).copy()
+#         steady_method = "target_plus_forward_dFdt_with_plateau_start"
+
+#         # -------------------------
+#         # Expand backwards to include start of plateau
+#         # -------------------------
+#         start_idx = steady_region.index[0]
+#         end_idx = steady_region.index[-1]
+
+#         while start_idx > 0:
+#             previous_force = cycle.loc[start_idx - 1, "force_smooth"]
+
+#             previous_near_plateau = (
+#                 previous_force >= target_force * start_expand_lower_ratio
+#                 and
+#                 previous_force <= target_force * start_expand_upper_ratio
+#             )
+
+#             if previous_near_plateau:
+#                 start_idx -= 1
+#             else:
+#                 break
+
+#         steady_region = cycle.loc[start_idx:end_idx].copy()
+
+#     else:
+#         # -------------------------
+#         # Fallback: use top-force part of cycle
+#         # -------------------------
+#         max_force = cycle["force_smooth"].max()
+
+#         steady_region = cycle[
+#             cycle["force_smooth"] >= fallback_ratio * max_force
+#         ].copy()
+
+#         steady_method = "fallback_top_force_region"
+
+#     # -------------------------
+#     # Final fallback if still too short
+#     # -------------------------
+#     if len(steady_region) < min_steady_points:
+#         steady_region = cycle.copy()
+#         steady_method = "fallback_whole_cycle"
+
+#     # -------------------------
+#     # Store start/end info
+#     # -------------------------
+#     steady_start_idx = steady_region.index[0]
+#     steady_end_idx = steady_region.index[-1]
+
+#     steady_start_time = steady_region["time"].iloc[0]
+#     steady_end_time = steady_region["time"].iloc[-1]
+
+#     return (
+#         steady_region,
+#         steady_method,
+#         steady_start_time,
+#         steady_end_time
+#     )
+
+# def find_steady_force_region(
+#     cycle_df,
+#     target_force,
+#     steady_force_tolerance=0.15,
+#     max_steady_dfdt=45.0,
+#     min_steady_points=2,
+#     smoothing_window=4,
+#     max_gap_points=2,
+#     fallback_ratio=0.95
+# ):
+#     import numpy as np
+#     import pandas as pd
+
+#     cycle = cycle_df.copy().reset_index(drop=True)
+
+#     # -------------------------
+#     # Smooth force before dF/dt
+#     # -------------------------
+#     cycle["force_smooth"] = (
+#         cycle["force"]
+#         .rolling(window=smoothing_window, center=True, min_periods=1)
+#         .mean()
+#     )
+
+#     # -------------------------
+#     # Calculate derivative
+#     # -------------------------
+#     cycle["dF_dt"] = (
+#         cycle["force_smooth"].shift(-1) - cycle["force_smooth"]
+#     ) / (
+#         cycle["time"].shift(-1) - cycle["time"]
+#     )
+
+#     cycle["dF_dt"] = cycle["dF_dt"].replace([np.inf, -np.inf], np.nan)
+#     cycle["dF_dt"] = cycle["dF_dt"].fillna(method="bfill").fillna(method="ffill")
+
+#     # -------------------------
+#     # Force limits
+#     # -------------------------
+#     lower_force_limit = target_force * (1 - steady_force_tolerance)
+#     upper_force_limit = target_force * (1 + steady_force_tolerance)
+
+#     # -------------------------
+#     # Initial steady mask
+#     # -------------------------
+#     cycle["steady_candidate"] = (
+#         (cycle["force_smooth"] >= lower_force_limit)
+#         &
+#         (cycle["force_smooth"] <= upper_force_limit)
+#         &
+#         (cycle["dF_dt"].abs() <= max_steady_dfdt)
+#     )
+
+#     # -------------------------
+#     # Fill tiny gaps caused by noise
+#     # -------------------------
+#     steady = cycle["steady_candidate"].copy()
+
+#     for i in range(1, len(steady) - 1):
+#         if not steady.iloc[i]:
+#             left = steady.iloc[max(0, i - max_gap_points):i].any()
+#             right = steady.iloc[i + 1:i + 1 + max_gap_points].any()
+
+#             if left and right:
+#                 steady.iloc[i] = True
+
+#     cycle["steady_candidate"] = steady
+
+#     # -------------------------
+#     # Find continuous regions
+#     # -------------------------
+#     cycle["region_id"] = (
+#         cycle["steady_candidate"] != cycle["steady_candidate"].shift()
+#     ).cumsum()
+
+#     valid_regions = []
+
+#     for _, region in cycle.groupby("region_id"):
+#         if region["steady_candidate"].iloc[0] and len(region) >= min_steady_points:
+#             valid_regions.append(region)
+
+#     # -------------------------
+#     # Use longest valid steady region
+#     # -------------------------
+#     if valid_regions:
+#         steady_region = max(valid_regions, key=len).copy()
+#         steady_method = "target_plus_smoothed_dFdt_longest_region"
+
+#     else:
+#         max_force = cycle["force"].max()
+
+#         steady_region = cycle[
+#             cycle["force"] > fallback_ratio * max_force
+#         ].copy()
+
+#         steady_method = "fallback_top_force_region"
+
+#     if len(steady_region) < min_steady_points:
+#         steady_region = cycle.copy()
+#         steady_method = "fallback_whole_cycle"
+
+#     steady_start_time = steady_region["time"].iloc[0]
+#     steady_end_time = steady_region["time"].iloc[-1]
+
+#     return steady_region, steady_method, steady_start_time, steady_end_time
+
+# def find_steady_force_region(
+#     cycle_df,
+#     target_force,
+#     steady_force_tolerance=0.30,
+#     max_steady_dfdt=5.0,
+#     min_steady_points=3,
+#     fallback_ratio=0.8
+# ):
+
+#     import numpy as np
+
+#     cycle = cycle_df.copy()
+
+#     cycle["dF_dt"] = (
+#         cycle["force"].diff()
+#         /
+#         cycle["time"].diff()
+#     )
+
+#     cycle["dF_dt"] = cycle["dF_dt"].replace(
+#         [np.inf, -np.inf],
+#         np.nan
+#     )
+
+#     lower_force_limit = target_force * (1 - steady_force_tolerance)
+#     upper_force_limit = target_force * (1 + steady_force_tolerance)
+
+#     steady_region = cycle[
+#         (cycle["force"] >= lower_force_limit)
+#         &
+#         (cycle["force"] <= upper_force_limit)
+#         &
+#         (cycle["dF_dt"].abs() <= max_steady_dfdt)
+#     ].copy()
+
+#     steady_method = "target_plus_dFdt"
+
+#     if len(steady_region) < min_steady_points:
+
+#         max_force = cycle["force"].max()
+
+#         steady_region = cycle[
+#             cycle["force"] > fallback_ratio * max_force
+#         ].copy()
+
+#         steady_method = "fallback_top_force_region"
+
+#     if len(steady_region) < min_steady_points:
+
+#         steady_region = cycle.copy()
+
+#         steady_method = "fallback_whole_cycle"
+
+#     steady_start_time = steady_region["time"].iloc[0]
+#     steady_end_time = steady_region["time"].iloc[-1]
+
+#     return steady_region, steady_method, steady_start_time, steady_end_time
 
 
 
