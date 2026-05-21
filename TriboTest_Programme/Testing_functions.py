@@ -262,8 +262,8 @@ def calibrate_z(z_coord=85, buffer = 0.01):
 
     global latest_force, neutral_z_coord, separation_z_coord, contact_z_coord, step, big_step, contact_force
 
-    corrected_target_force = contact_force
-    # corrected_target_force = ((contact_force - 1.6331) / 1.0612) # conservative estimate to ensure we don't overshoot too much
+    # corrected_target_force = contact_force
+    corrected_target_force = ((contact_force - 0.2741) / 1.026) # conservative estimate to ensure we don't overshoot too much
     print(f"Target force for calibration: {corrected_target_force:.2f}N")
     
     neutral_callibration = True
@@ -324,13 +324,13 @@ def repeat_calibrate_z():
 
 
 
-def correct_z_for_force():
+def correct_z_for_force(hold_force):
     global latest_force, contact_time, cycle_start_time, cycle_force_tolerance, z_correct_step
 
-    if latest_force > contact_force + cycle_force_tolerance:
+    if latest_force > hold_force + cycle_force_tolerance:
         adjust_z_up(z_correct_step) # move up if force is too high
         
-    elif latest_force < contact_force - cycle_force_tolerance:
+    elif latest_force < hold_force - cycle_force_tolerance:
         adjust_z_down(z_correct_step) # move down if force is too low
         
 
@@ -351,13 +351,15 @@ def contact_cycle():
         z_go_to(contact_z_coord)
         send_gcode("M400") # waits for printer to finish moving
 
-
         time.sleep(initial_wait) # short delay to allow force to update after contact
         # scaled_delay = contact_force/500 # scales the initial wait time based on the target force (higher forces may need a slightly longer delay to stabilize)
         # time.sleep(scaled_delay)
 
+        # hold_force = latest_force # record the force at initial contact to compare against during the cycle
+        hold_force = contact_force # use the target force as the reference for corrections during the cycle 
+
         while time.time() - cycle_start_time < (0.65* cycle_time):
-            correct_z_for_force() # actively holds correct force during the set contact time   
+            correct_z_for_force(hold_force) # actively holds correct force during the set contact time   
             time.sleep(z_correct_delay) # wait for force to update
         
         z_go_to(separation_z_coord)
