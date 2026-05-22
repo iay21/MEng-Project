@@ -657,6 +657,111 @@ def prompt_and_start_full_force_range():
     dialog.bind("<Return>", lambda event: start())
     
 
+def prompt_and_start_impedance_test():
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Impedance Test Setup")
+    dialog.geometry("350x240")
+    dialog.transient(root)
+    dialog.grab_set()
+    dialog.lift()
+    dialog.focus_force()
+
+    material_var = tk.StringVar()
+    counter_var = tk.StringVar()
+    mode_var = tk.StringVar(value="VOLTAGE")
+
+    frame = tk.Frame(dialog, padx=10, pady=10)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text="Primary Material").pack(anchor="w")
+    tk.Entry(frame, textvariable=material_var).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Counter Material").pack(anchor="w")
+    tk.Entry(frame, textvariable=counter_var).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Measurement Mode").pack(anchor="w")
+    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT").pack(fill="x", pady=5)
+
+    def start():
+        material = material_var.get().strip()
+        counter = counter_var.get().strip()
+        mode = mode_var.get()
+
+        if not material or not counter:
+            messagebox.showerror("Error", "Please enter both materials.")
+            return
+
+        dialog.destroy()
+
+        def worker():
+
+            for label, resistance in Testing_functions.IMPEDANCE_RESISTANCES:
+
+                confirm_event = threading.Event()
+
+                def resistance_popup():
+                    popup = tk.Toplevel(root)
+                    popup.title("Set Resistance")
+                    popup.geometry("360x160")
+                    popup.transient(root)
+                    popup.grab_set()
+                    popup.lift()
+                    popup.focus_force()
+
+                    frame = tk.Frame(popup, padx=15, pady=15)
+                    frame.pack(fill="both", expand=True)
+
+                    tk.Label(
+                        frame,
+                        text=f"Set the resistance to {label}",
+                        font=("Segoe UI", 12, "bold")
+                    ).pack(pady=(0, 10))
+
+                    tk.Label(
+                        frame,
+                        text="Press Done once the resistor/load is correctly connected.",
+                        wraplength=320
+                    ).pack(pady=(0, 10))
+
+                    def done():
+                        popup.destroy()
+                        confirm_event.set()
+
+                    tk.Button(
+                        frame,
+                        text="Done",
+                        command=done,
+                        width=20,
+                        height=2
+                    ).pack()
+
+                    popup.protocol("WM_DELETE_WINDOW", done)
+
+                root.after(0, resistance_popup)
+                confirm_event.wait()
+
+                Testing_functions.run_single_impedance_test(
+                    material,
+                    counter,
+                    resistance,
+                    mode,
+                    label
+                )
+
+            print("✅ Impedance test sequence complete.")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    tk.Button(
+        frame,
+        text="Start Impedance Test",
+        command=start,
+        height=2
+    ).pack(pady=10, fill="x")
+
+    dialog.bind("<Return>", lambda event: start())
+
 # def prompt_and_start_test(test_type):
 
 #     material = simpledialog.askstring(
@@ -729,6 +834,7 @@ extra_buttons = [
     ("Run Contact Test", lambda: prompt_and_start_test("contact")),
     ("Run Slide Test", lambda: prompt_and_start_test("slide")),
     ("Run Full Force Range Test", lambda: prompt_and_start_full_force_range()),
+    ("Run Impedance Test", lambda: prompt_and_start_impedance_test()),
     ("Run Z Calibration Test", lambda: prompt_and_start_z_calibration_test()),
 ]
 

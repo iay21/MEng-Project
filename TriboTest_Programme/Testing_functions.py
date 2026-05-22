@@ -40,10 +40,32 @@ contact_time = 0.5 # s
 separation_time = 0.5 # s
 separation_height = 3 # mm
 
-no_contact_cycles = 25
+no_contact_cycles = 150
 no_slide_cycles = 2
 
 range_of_forces = [5, 10, 15, 20, 25, 30]
+
+IMPEDANCE_RESISTANCES = [
+    ("10k", 10e3),
+    ("100k", 100e3),
+    ("549k", 549e3),
+    ("1M", 1e6),
+    ("5.1M", 5.1e6),
+    ("10M", 10e6),
+    ("50M", 50e6),
+    ("100M", 100e6),
+    ("1G", 1e9),
+]
+
+def format_resistance(r):
+    if r >= 1e9:
+        return f"{r/1e9:g}G"
+    elif r >= 1e6:
+        return f"{r/1e6:g}M"
+    elif r >= 1e3:
+        return f"{r/1e3:g}k"
+    else:
+        return str(int(r))
 
 contact_speed = 5000
 slide_speed = 1000
@@ -54,9 +76,9 @@ number_of_contact_tests = 2
 number_of_slide_tests = 1
 
 
-initial_wait = 0.2 # time to wait after first contact before starting active force control (s)
+initial_wait = 0.15 # time to wait after first contact before starting active force control (s)
 z_correct_delay = 0.05 # time to wait between z adjustments to allow force to
-cycle_force_tolerance = 0.01 # N tolerance
+cycle_force_tolerance = 0.1 # N tolerance
 z_correct_step = 0.01 # mm to adjust z by when correcting for force
 
 
@@ -263,7 +285,7 @@ def calibrate_z(z_coord=85, buffer = 0.01):
     global latest_force, neutral_z_coord, separation_z_coord, contact_z_coord, step, big_step, contact_force
 
     # corrected_target_force = contact_force
-    corrected_target_force = ((contact_force - 0.2741) / 1.026) # conservative estimate to ensure we don't overshoot too much
+    corrected_target_force = ((contact_force + 0.1928) / 1.0335) # conservative estimate to ensure we don't overshoot too much
     print(f"Target force for calibration: {corrected_target_force:.2f}N")
     
     neutral_callibration = True
@@ -394,7 +416,7 @@ def sliding_cycle():
 # Logging Control
 # -----------------------------------------------------------------------------
 
-def start_test(test_name, material, counter_material, load_resistance, measurement_mode, contact_force):
+def start_test(test_name, material, counter_material, load_resistance, measurement_mode, contact_force, extra_folder=None):
     """
     Start a new test session and create a CSV log file.
     Creates a subfolder for the material.
@@ -411,6 +433,10 @@ def start_test(test_name, material, counter_material, load_resistance, measureme
         
         # Create folder for the material
         material_dir = os.path.join(SAVE_DIR, material)
+
+        if extra_folder is not None:
+            material_dir = os.path.join(material_dir, extra_folder)
+
         os.makedirs(material_dir, exist_ok=True)
 
         # -----------------------------
@@ -431,18 +457,6 @@ def start_test(test_name, material, counter_material, load_resistance, measureme
         test_str = clean(test_name)
         mode_str = clean(measurement_mode)
         contact_force_str = clean(contact_force)
-
-        # convert resistance nicely
-        def format_resistance(r):
-            if r >= 1e9:
-                return f"{r/1e9:.0f}G"
-            elif r >= 1e6:
-                return f"{r/1e6:.1f}M"
-            elif r >= 1e3:
-                return f"{r/1e3:.0f}k"
-            else:
-                return str(int(r))
-
         res_str = format_resistance(load_resistance)
 
 
@@ -560,6 +574,36 @@ def run_contact_full_force_range(material, counter_material, load_resistance, me
 
     reset()
     send_gcode("M400")  # waits for printer to finish moving
+
+def run_single_impedance_test(material, counter_material, load_resistance, measurement_mode, resistance_label):
+    """
+    Runs one impedance test at 10N only.
+    Saves into:
+    SAVE_DIR/material/impedance
+    """
+    global contact_force
+
+    original_force = contact_force
+    contact_force = 10
+
+    print(f"Running impedance test at 10N with resistance {resistance_label}")
+
+    calibrate_z()
+    send_gcode("M400")
+
+    start_test(
+        "contact",
+        material,
+        counter_material,
+        load_resistance,
+        measurement_mode,
+        contact_force,
+        extra_folder="impedance"
+    )
+
+    send_gcode("M400")
+
+    contact_force = original_force
 
 def run_slide_protocol(material):
     ''' runs whole protocol for only slide mode'''
