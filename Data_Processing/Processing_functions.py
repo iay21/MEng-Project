@@ -1755,7 +1755,7 @@ def analyse_force_control_method(method_folder):
         f"{method_name}: steady-region points",
         f"{method_name}_steady_points.png"
     )
-    
+
     print(f"Saved steady force-control analysis:\n{output_excel}")
 
     return output_excel
@@ -2131,9 +2131,11 @@ def compare_force_control_methods(
 
 def analyse_voltage_cycle_convergence(
     folder_path,
-    threshold_percent=5
+    threshold_percent=2,
+    min_cycles_before_stable=10,
+    window_size=20,
+    window_threshold_percent=2
 ):
-
 
     all_cycle_results = []
     summary_results = []
@@ -2148,58 +2150,9 @@ def analyse_voltage_cycle_convergence(
     if len(csv_files) == 0:
         raise ValueError("No CSV files found.")
 
-
-    def load_data(file_path):
-
-        data_start = 0
-
-        with open(file_path, "r") as f:
-
-            for i, line in enumerate(f):
-
-                line = line.strip()
-
-                if not line:
-                    continue
-
-                if line.startswith("#"):
-                    continue
-
-                if "time" in line.lower():
-                    continue
-
-                data_start = i
-                break
-
-        df = pd.read_csv(
-            file_path,
-            sep=r"[\s,\t]+",
-            engine="python",
-            skiprows=data_start,
-            header=None
-        )
-
-        df = df.iloc[:, :3]
-        df.columns = ["time", "force", "voltage"]
-
-        df["time"] = pd.to_numeric(df["time"], errors="coerce")
-        df["force"] = pd.to_numeric(df["force"], errors="coerce")
-        df["voltage"] = pd.to_numeric(df["voltage"], errors="coerce")
-
-        df = df.dropna()
-
-        # remove isolated first-row time glitch
-        if len(df) > 1 and df["time"].iloc[0] > df["time"].iloc[1]:
-            df = df.iloc[1:]
-
-        df = df.reset_index(drop=True)
-
-        return df
-
     for file in csv_files:
 
         file_path = os.path.join(folder_path, file)
-
         target_force = read_target_force(file_path)
 
         if target_force is None:
@@ -2207,7 +2160,6 @@ def analyse_voltage_cycle_convergence(
             continue
 
         df = load_data(file_path)
-
         if len(df) == 0:
             continue
 
@@ -2215,14 +2167,12 @@ def analyse_voltage_cycle_convergence(
         df["contact_shift"] = df["contact"].shift(1).fillna(False)
 
         cycle_starts = df[
-            (df["contact"] == True)
-            &
+            (df["contact"] == True) &
             (df["contact_shift"] == False)
         ].index.tolist()
 
         cycle_ends = df[
-            (df["contact"] == False)
-            &
+            (df["contact"] == False) &
             (df["contact_shift"] == True)
         ].index.tolist()
 
@@ -2233,34 +2183,24 @@ def analyse_voltage_cycle_convergence(
             cycle_ends.pop(0)
 
         min_len = min(len(cycle_starts), len(cycle_ends))
-
         cycle_starts = cycle_starts[:min_len]
         cycle_ends = cycle_ends[:min_len]
 
         rectified_peak_values = []
         cycle_rms_values = []
 
-        for cycle_num, (start, end) in enumerate(
-            zip(cycle_starts, cycle_ends),
-            start=1
-        ):
+        for cycle_num, (start, end) in enumerate(zip(cycle_starts, cycle_ends), start=1):
 
             cycle = df.loc[start:end]
 
             if len(cycle) < MIN_CYCLE_POINTS:
                 continue
 
-            v_max = cycle["voltage"].max()
-            v_min = cycle["voltage"].min()
-
-            positive_peak = abs(v_max)
-            negative_peak_rectified = abs(v_min)
+            positive_peak = abs(cycle["voltage"].max())
+            negative_peak_rectified = abs(cycle["voltage"].min())
 
             rectified_voltage = abs(cycle["voltage"])
-
-            cycle_rms = np.sqrt(
-                np.mean(rectified_voltage ** 2)
-            )
+            cycle_rms = np.sqrt(np.mean(rectified_voltage ** 2))
 
             rectified_peak_values.extend([
                 positive_peak,
@@ -2270,40 +2210,35 @@ def analyse_voltage_cycle_convergence(
             cycle_rms_values.append(cycle_rms)
 
             all_cycle_results.append({
-
                 "File": file,
                 "Target Force (N)": target_force,
                 "Cycle": cycle_num,
-
                 "Positive Peak (V)": positive_peak,
                 "Rectified Negative Peak (V)": negative_peak_rectified,
                 "Mean Rectified Peak This Cycle (V)": np.mean([
                     positive_peak,
                     negative_peak_rectified
                 ]),
-
                 "RMS Rectified Voltage This Cycle (V)": cycle_rms
             })
 
-        if len(rectified_peak_values) == 0 or len(cycle_rms_values) == 0:
+        if len(cycle_rms_values) == 0:
             continue
 
         rectified_peak_values = np.array(rectified_peak_values)
         cycle_rms_values = np.array(cycle_rms_values)
+
+        total_cycles = len(cycle_rms_values)
 
         final_peak_mean = np.mean(rectified_peak_values)
         final_rms_mean = np.mean(cycle_rms_values)
 
         running_peak_mean = []
         running_rms_mean = []
-
         peak_percent_difference = []
         rms_percent_difference = []
-
         peak_ci_95 = []
         rms_ci_95 = []
-
-        total_cycles = len(cycle_rms_values)
 
         for n in range(1, total_cycles + 1):
 
@@ -2316,127 +2251,99 @@ def analyse_voltage_cycle_convergence(
             running_peak_mean.append(peak_mean_n)
             running_rms_mean.append(rms_mean_n)
 
-            if final_peak_mean != 0:
-                peak_pct_diff = (
-                    (peak_mean_n - final_peak_mean)
-                    / final_peak_mean
-                ) * 100
-            else:
-                peak_pct_diff = np.nan
+            peak_percent_difference.append(
+                ((peak_mean_n - final_peak_mean) / final_peak_mean) * 100
+                if final_peak_mean != 0 else np.nan
+            )
 
-            if final_rms_mean != 0:
-                rms_pct_diff = (
-                    (rms_mean_n - final_rms_mean)
-                    / final_rms_mean
-                ) * 100
-            else:
-                rms_pct_diff = np.nan
-
-            peak_percent_difference.append(peak_pct_diff)
-            rms_percent_difference.append(rms_pct_diff)
+            rms_percent_difference.append(
+                ((rms_mean_n - final_rms_mean) / final_rms_mean) * 100
+                if final_rms_mean != 0 else np.nan
+            )
 
             if n > 1:
-                peak_ci = (
-                    1.96
-                    * np.std(peak_subset, ddof=1)
-                    / np.sqrt(len(peak_subset))
+                peak_ci_95.append(
+                    1.96 * np.std(peak_subset, ddof=1) / np.sqrt(len(peak_subset))
                 )
-
-                rms_ci = (
-                    1.96
-                    * np.std(rms_subset, ddof=1)
-                    / np.sqrt(len(rms_subset))
+                rms_ci_95.append(
+                    1.96 * np.std(rms_subset, ddof=1) / np.sqrt(len(rms_subset))
                 )
-
             else:
-                peak_ci = np.nan
-                rms_ci = np.nan
-
-            peak_ci_95.append(peak_ci)
-            rms_ci_95.append(rms_ci)
+                peak_ci_95.append(np.nan)
+                rms_ci_95.append(np.nan)
 
         running_peak_mean = np.array(running_peak_mean)
         running_rms_mean = np.array(running_rms_mean)
-
         peak_percent_difference = np.array(peak_percent_difference)
         rms_percent_difference = np.array(rms_percent_difference)
-
         peak_ci_95 = np.array(peak_ci_95)
         rms_ci_95 = np.array(rms_ci_95)
 
-        peak_stable_cycle = np.nan
-        rms_stable_cycle = np.nan
-        both_stable_cycle = np.nan
+        # =================================================
+        # STRICT RMS WINDOW STABILITY DECISION
+        # =================================================
 
-        for i in range(total_cycles):
+        rms_window_stable_cycle = np.nan
+        rms_window_mean_values = []
+        rms_window_percent_difference = []
 
-            if np.all(
-                np.abs(peak_percent_difference[i:]) <= threshold_percent
-            ):
-                peak_stable_cycle = i + 1
+        for start_idx in range(0, total_cycles - window_size + 1):
+
+            end_idx = start_idx + window_size
+            window_values = cycle_rms_values[start_idx:end_idx]
+            window_mean = np.mean(window_values)
+
+            window_pct_diff = (
+                ((window_mean - final_rms_mean) / final_rms_mean) * 100
+                if final_rms_mean != 0 else np.nan
+            )
+
+            rms_window_mean_values.append(window_mean)
+            rms_window_percent_difference.append(window_pct_diff)
+
+            cycle_number = end_idx
+
+            if cycle_number < min_cycles_before_stable:
+                continue
+
+            remaining_windows = rms_window_percent_difference[start_idx:]
+
+            if np.all(np.abs(remaining_windows) <= window_threshold_percent):
+                rms_window_stable_cycle = cycle_number
                 break
 
-        for i in range(total_cycles):
-
-            if np.all(
-                np.abs(rms_percent_difference[i:]) <= threshold_percent
-            ):
-                rms_stable_cycle = i + 1
-                break
-
-        for i in range(total_cycles):
-
-            if (
-                np.all(
-                    np.abs(peak_percent_difference[i:])
-                    <= threshold_percent
-                )
-                and
-                np.all(
-                    np.abs(rms_percent_difference[i:])
-                    <= threshold_percent
-                )
-            ):
-                both_stable_cycle = i + 1
-                break
+        rms_window_mean_values = np.array(rms_window_mean_values)
+        rms_window_percent_difference = np.array(rms_window_percent_difference)
 
         summary_results.append({
-
             "File": file,
             "Target Force (N)": target_force,
             "Total Mechanical Cycles": total_cycles,
             "Total Voltage Peaks Used": len(rectified_peak_values),
 
             "Final Mean Rectified Peak (V)": final_peak_mean,
-            "Final Rectified Peak STD (V)": np.std(
-                rectified_peak_values,
-                ddof=1
-            ),
+            "Final Rectified Peak STD (V)": np.std(rectified_peak_values, ddof=1),
             "Final Rectified Peak CV (%)": (
-                np.std(rectified_peak_values, ddof=1)
-                / final_peak_mean
+                np.std(rectified_peak_values, ddof=1) / final_peak_mean
             ) * 100 if final_peak_mean != 0 else np.nan,
 
             "Final Mean RMS Rectified Voltage (V)": final_rms_mean,
-            "Final RMS STD (V)": np.std(
-                cycle_rms_values,
-                ddof=1
-            ),
+            "Final RMS STD (V)": np.std(cycle_rms_values, ddof=1),
             "Final RMS CV (%)": (
-                np.std(cycle_rms_values, ddof=1)
-                / final_rms_mean
+                np.std(cycle_rms_values, ddof=1) / final_rms_mean
             ) * 100 if final_rms_mean != 0 else np.nan,
 
-            "Threshold (%)": threshold_percent,
-            "Cycles Needed - Rectified Peak": peak_stable_cycle,
-            "Cycles Needed - RMS": rms_stable_cycle,
-            "Cycles Needed - Both": both_stable_cycle
+            "Stability Based On": "RMS moving-window only",
+            "RMS Window Size": window_size,
+            "RMS Window Threshold (%)": window_threshold_percent,
+            "Minimum Cycles Before Stability Allowed": min_cycles_before_stable,
+            "Cycles Needed - RMS Window Stability": rms_window_stable_cycle
         })
 
         force_label = int(round(target_force))
 
         # =================================================
-        # PLOT 1: RUNNING MEAN PEAK + RUNNING RMS
+        # PLOT 1: RUNNING MEAN PEAK + RMS
         # =================================================
 
         plt.figure(figsize=(8, 5))
@@ -2455,45 +2362,30 @@ def analyse_voltage_cycle_convergence(
             label="Mean RMS rectified signal"
         )
 
-        plt.axhline(
-            final_peak_mean,
-            linestyle="--",
-            label="Final rectified peak mean"
-        )
+        plt.axhline(final_peak_mean, linestyle="--", label="Final rectified peak mean")
+        plt.axhline(final_rms_mean, linestyle=":", label="Final RMS mean")
 
-        plt.axhline(
-            final_rms_mean,
-            linestyle=":",
-            label="Final RMS mean"
-        )
-
-        if not np.isnan(both_stable_cycle):
-
+        if not np.isnan(rms_window_stable_cycle):
             plt.axvline(
-                both_stable_cycle,
+                rms_window_stable_cycle,
                 linestyle="-.",
-                label=f"Both stable: {both_stable_cycle} cycles"
+                label=f"RMS window stable: {rms_window_stable_cycle} cycles"
             )
 
         plt.xlabel("Number of Mechanical Cycles Included")
         plt.ylabel("Voltage (V)")
         plt.title(f"{force_label}N: voltage convergence")
         plt.legend()
-
         plt.tight_layout()
 
         plt.savefig(
-            os.path.join(
-                folder_path,
-                f"{force_label}N_voltage_convergence.png"
-            ),
+            os.path.join(folder_path, f"{force_label}N_voltage_convergence.png"),
             dpi=300
         )
-
         plt.close()
 
         # =================================================
-        # PLOT 2: % DIFFERENCE FROM FINAL VALUE
+        # PLOT 2: RUNNING % DIFFERENCE
         # =================================================
 
         plt.figure(figsize=(8, 5))
@@ -2512,50 +2404,72 @@ def analyse_voltage_cycle_convergence(
             label="RMS rectified signal"
         )
 
-        plt.axhline(
-            threshold_percent,
-            linestyle="--"
-        )
+        plt.axhline(threshold_percent, linestyle="--")
+        plt.axhline(-threshold_percent, linestyle="--")
+        plt.axhline(0, linestyle=":")
 
-        plt.axhline(
-            -threshold_percent,
-            linestyle="--"
-        )
-
-        plt.axhline(
-            0,
-            linestyle=":"
-        )
-
-        if not np.isnan(both_stable_cycle):
-
+        if not np.isnan(rms_window_stable_cycle):
             plt.axvline(
-                both_stable_cycle,
+                rms_window_stable_cycle,
                 linestyle="-.",
-                label=f"Both stable: {both_stable_cycle} cycles"
+                label=f"RMS window stable: {rms_window_stable_cycle} cycles"
             )
 
         plt.xlabel("Number of Mechanical Cycles Included")
         plt.ylabel("% Difference from Final Value")
-        plt.title(
-            f"{force_label}N: convergence within ±{threshold_percent}%"
-        )
+        plt.title(f"{force_label}N: running convergence within ±{threshold_percent}%")
         plt.legend()
-
         plt.tight_layout()
 
         plt.savefig(
-            os.path.join(
-                folder_path,
-                f"{force_label}N_voltage_percent_difference.png"
-            ),
+            os.path.join(folder_path, f"{force_label}N_voltage_percent_difference.png"),
             dpi=300
         )
-
         plt.close()
 
         # =================================================
-        # PLOT 3: 95% CONFIDENCE INTERVALS
+        # PLOT 3: RMS WINDOW CONVERGENCE
+        # =================================================
+
+        plt.figure(figsize=(8, 5))
+
+        window_cycle_numbers = range(window_size, window_size + len(rms_window_percent_difference))
+
+        plt.plot(
+            window_cycle_numbers,
+            rms_window_percent_difference,
+            marker="o",
+            label=f"RMS {window_size}-cycle window mean"
+        )
+
+        plt.axhline(window_threshold_percent, linestyle="--")
+        plt.axhline(-window_threshold_percent, linestyle="--")
+        plt.axhline(0, linestyle=":")
+
+        if not np.isnan(rms_window_stable_cycle):
+            plt.axvline(
+                rms_window_stable_cycle,
+                linestyle="-.",
+                label=f"Stable: {rms_window_stable_cycle} cycles"
+            )
+
+        plt.xlabel("Final Cycle Included in Window")
+        plt.ylabel("% Difference from Final RMS Mean")
+        plt.title(
+            f"{force_label}N: RMS moving-window convergence "
+            f"±{window_threshold_percent}%"
+        )
+        plt.legend()
+        plt.tight_layout()
+
+        plt.savefig(
+            os.path.join(folder_path, f"{force_label}N_rms_window_convergence.png"),
+            dpi=300
+        )
+        plt.close()
+
+        # =================================================
+        # PLOT 4: 95% CONFIDENCE INTERVALS
         # =================================================
 
         plt.figure(figsize=(8, 5))
@@ -2574,29 +2488,23 @@ def analyse_voltage_cycle_convergence(
             label="RMS rectified signal 95% CI"
         )
 
-        if not np.isnan(both_stable_cycle):
-
+        if not np.isnan(rms_window_stable_cycle):
             plt.axvline(
-                both_stable_cycle,
+                rms_window_stable_cycle,
                 linestyle="-.",
-                label=f"Both stable: {both_stable_cycle} cycles"
+                label=f"RMS window stable: {rms_window_stable_cycle} cycles"
             )
 
         plt.xlabel("Number of Mechanical Cycles Included")
         plt.ylabel("95% CI (V)")
         plt.title(f"{force_label}N: confidence interval vs cycle count")
         plt.legend()
-
         plt.tight_layout()
 
         plt.savefig(
-            os.path.join(
-                folder_path,
-                f"{force_label}N_voltage_confidence_interval.png"
-            ),
+            os.path.join(folder_path, f"{force_label}N_voltage_confidence_interval.png"),
             dpi=300
         )
-
         plt.close()
 
     all_cycles_df = pd.DataFrame(all_cycle_results)
@@ -2629,6 +2537,661 @@ def analyse_voltage_cycle_convergence(
     print(f"Saved voltage convergence analysis:\n{output_excel}")
 
     return output_excel
+
+def analyse_impedance_folder(folder_path):
+
+    results = []
+
+    csv_files = sorted([
+        f for f in os.listdir(folder_path)
+        if f.endswith(".csv")
+        and "_analysis" not in f
+        and "_analysed" not in f
+        and "IMPEDANCE_ANALYSIS" not in f
+    ])
+
+    if len(csv_files) == 0:
+        raise ValueError("No CSV files found.")
+
+    def read_load_resistance(file_path):
+
+        with open(file_path, "r") as f:
+            for line in f:
+
+                if "# Load Resistance (Ohm)" in line:
+                    parts = line.strip().split(",")
+
+                    if len(parts) >= 2:
+                        return float(parts[1])
+
+                if "time" in line.lower():
+                    break
+
+        return None
+
+    def resistance_label(resistance):
+
+        if resistance >= 1e9:
+            return f"{resistance / 1e9:g}G"
+
+        elif resistance >= 1e6:
+            return f"{resistance / 1e6:g}M"
+
+        elif resistance >= 1e3:
+            return f"{resistance / 1e3:g}k"
+
+        else:
+            return f"{resistance:g}"
+
+    for file in csv_files:
+
+        file_path = os.path.join(folder_path, file)
+
+        resistance = read_load_resistance(file_path)
+
+        if resistance is None:
+            print(f"Skipping {file}: no load resistance found.")
+            continue
+
+        df = load_data(file_path)
+
+        if len(df) == 0:
+            continue
+
+        cycles = find_cycles(df)
+
+        cycle_vrms = []
+        cycle_vpeak = []
+
+        for cycle_number, (start, end) in enumerate(cycles, start=1):
+
+            cycle = df.loc[start:end]
+
+            if len(cycle) < MIN_CYCLE_POINTS:
+                continue
+
+            voltage = cycle["voltage"].values
+
+            vrms = np.sqrt(
+                np.mean(voltage ** 2)
+            )
+
+            vpeak = np.max(
+                np.abs(voltage)
+            )
+
+            cycle_vrms.append(vrms)
+            cycle_vpeak.append(vpeak)
+
+        if len(cycle_vrms) == 0:
+            print(f"Skipping {file}: no valid cycles found.")
+            continue
+
+        results.append({
+
+            "File": file,
+
+            "Load Resistance (Ohm)": resistance,
+
+            "Load Resistance Label": resistance_label(resistance),
+
+            "Cycles Analysed": len(cycle_vrms),
+
+            "Mean Vrms (V)": np.mean(cycle_vrms),
+
+            "STD Vrms (V)": np.std(cycle_vrms, ddof=1),
+
+            "Mean Vpeak (V)": np.mean(cycle_vpeak),
+
+            "STD Vpeak (V)": np.std(cycle_vpeak, ddof=1),
+        })
+
+    summary_df = pd.DataFrame(results)
+
+    if len(summary_df) == 0:
+        raise ValueError("No valid impedance data found.")
+
+    summary_df = summary_df.sort_values(
+        "Load Resistance (Ohm)"
+    )
+
+    output_excel = os.path.join(
+        folder_path,
+        "IMPEDANCE_ANALYSIS.xlsx"
+    )
+
+    with pd.ExcelWriter(
+        output_excel,
+        engine="openpyxl"
+    ) as writer:
+
+        summary_df.to_excel(
+            writer,
+            sheet_name="SUMMARY",
+            index=False
+        )
+
+    plt.figure(figsize=(8, 5))
+
+    plt.plot(
+        summary_df["Load Resistance (Ohm)"],
+        summary_df["Mean Vrms (V)"],
+        marker="o",
+        label="Mean Vrms"
+    )
+
+    plt.plot(
+        summary_df["Load Resistance (Ohm)"],
+        summary_df["Mean Vpeak (V)"],
+        marker="o",
+        label="Mean Vpeak"
+    )
+
+    plt.xscale("log")
+
+    plt.xlabel("Load Resistance (Ohm)")
+    plt.ylabel("Voltage (V)")
+    plt.title("Impedance Matching")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            folder_path,
+            "Impedance_Vrms_Vpeak.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    print(f"Saved impedance analysis:\n{output_excel}")
+
+    return output_excel
+
+# def analyse_voltage_cycle_convergence(
+#     folder_path,
+#     threshold_percent=2,
+#     min_stable_cycles=5,        # RMS must stay stable for at least this many cycles
+#     min_cycles_before_stable=10,  # do not allow stability before this cycle
+#     window_size=20,
+#     window_threshold_percent=2
+# ):
+
+
+#     all_cycle_results = []
+#     summary_results = []
+
+#     csv_files = sorted([
+#         f for f in os.listdir(folder_path)
+#         if f.endswith(".csv")
+#         and "_analysis" not in f
+#         and "_analysed" not in f
+#     ])
+
+#     if len(csv_files) == 0:
+#         raise ValueError("No CSV files found.")
+
+#     for file in csv_files:
+
+#         file_path = os.path.join(folder_path, file)
+
+#         target_force = read_target_force(file_path)
+
+#         if target_force is None:
+#             print(f"Skipping {file}: no target force found.")
+#             continue
+
+#         df = load_data(file_path)
+
+#         if len(df) == 0:
+#             continue
+
+#         df["contact"] = df["force"] > FORCE_THRESHOLD
+#         df["contact_shift"] = df["contact"].shift(1).fillna(False)
+
+#         cycle_starts = df[
+#             (df["contact"] == True)
+#             &
+#             (df["contact_shift"] == False)
+#         ].index.tolist()
+
+#         cycle_ends = df[
+#             (df["contact"] == False)
+#             &
+#             (df["contact_shift"] == True)
+#         ].index.tolist()
+
+#         if len(cycle_starts) == 0 or len(cycle_ends) == 0:
+#             continue
+
+#         if cycle_ends[0] < cycle_starts[0]:
+#             cycle_ends.pop(0)
+
+#         min_len = min(len(cycle_starts), len(cycle_ends))
+
+#         cycle_starts = cycle_starts[:min_len]
+#         cycle_ends = cycle_ends[:min_len]
+
+#         rectified_peak_values = []
+#         cycle_rms_values = []
+
+#         for cycle_num, (start, end) in enumerate(
+#             zip(cycle_starts, cycle_ends),
+#             start=1
+#         ):
+
+#             cycle = df.loc[start:end]
+
+#             if len(cycle) < MIN_CYCLE_POINTS:
+#                 continue
+
+#             v_max = cycle["voltage"].max()
+#             v_min = cycle["voltage"].min()
+
+#             positive_peak = abs(v_max)
+#             negative_peak_rectified = abs(v_min)
+
+#             rectified_voltage = abs(cycle["voltage"])
+
+#             cycle_rms = np.sqrt(
+#                 np.mean(rectified_voltage ** 2)
+#             )
+
+#             rectified_peak_values.extend([
+#                 positive_peak,
+#                 negative_peak_rectified
+#             ])
+
+#             cycle_rms_values.append(cycle_rms)
+
+#             all_cycle_results.append({
+
+#                 "File": file,
+#                 "Target Force (N)": target_force,
+#                 "Cycle": cycle_num,
+
+#                 "Positive Peak (V)": positive_peak,
+#                 "Rectified Negative Peak (V)": negative_peak_rectified,
+#                 "Mean Rectified Peak This Cycle (V)": np.mean([
+#                     positive_peak,
+#                     negative_peak_rectified
+#                 ]),
+
+#                 "RMS Rectified Voltage This Cycle (V)": cycle_rms
+#             })
+
+#         if len(rectified_peak_values) == 0 or len(cycle_rms_values) == 0:
+#             continue
+
+#         rectified_peak_values = np.array(rectified_peak_values)
+#         cycle_rms_values = np.array(cycle_rms_values)
+
+#         final_peak_mean = np.mean(rectified_peak_values)
+#         final_rms_mean = np.mean(cycle_rms_values)
+
+#         running_peak_mean = []
+#         running_rms_mean = []
+
+#         peak_percent_difference = []
+#         rms_percent_difference = []
+
+#         peak_ci_95 = []
+#         rms_ci_95 = []
+
+#         total_cycles = len(cycle_rms_values)
+
+#         for n in range(1, total_cycles + 1):
+
+#             peak_subset = rectified_peak_values[:2 * n]
+#             rms_subset = cycle_rms_values[:n]
+
+#             peak_mean_n = np.mean(peak_subset)
+#             rms_mean_n = np.mean(rms_subset)
+
+#             running_peak_mean.append(peak_mean_n)
+#             running_rms_mean.append(rms_mean_n)
+
+#             if final_peak_mean != 0:
+#                 peak_pct_diff = (
+#                     (peak_mean_n - final_peak_mean)
+#                     / final_peak_mean
+#                 ) * 100
+#             else:
+#                 peak_pct_diff = np.nan
+
+#             if final_rms_mean != 0:
+#                 rms_pct_diff = (
+#                     (rms_mean_n - final_rms_mean)
+#                     / final_rms_mean
+#                 ) * 100
+#             else:
+#                 rms_pct_diff = np.nan
+
+#             peak_percent_difference.append(peak_pct_diff)
+#             rms_percent_difference.append(rms_pct_diff)
+
+#             if n > 1:
+#                 peak_ci = (
+#                     1.96
+#                     * np.std(peak_subset, ddof=1)
+#                     / np.sqrt(len(peak_subset))
+#                 )
+
+#                 rms_ci = (
+#                     1.96
+#                     * np.std(rms_subset, ddof=1)
+#                     / np.sqrt(len(rms_subset))
+#                 )
+
+#             else:
+#                 peak_ci = np.nan
+#                 rms_ci = np.nan
+
+#             peak_ci_95.append(peak_ci)
+#             rms_ci_95.append(rms_ci)
+
+#         running_peak_mean = np.array(running_peak_mean)
+#         running_rms_mean = np.array(running_rms_mean)
+
+#         peak_percent_difference = np.array(peak_percent_difference)
+#         rms_percent_difference = np.array(rms_percent_difference)
+
+#         peak_ci_95 = np.array(peak_ci_95)
+#         rms_ci_95 = np.array(rms_ci_95)
+
+#         # peak_stable_cycle = np.nan
+#         # rms_stable_cycle = np.nan
+#         # both_stable_cycle = np.nan
+
+#         peak_stable_cycle = np.nan      # kept only for reference
+#         rms_stable_cycle = np.nan       # THIS is the real stability decision
+
+#         # Peak stability is kept for information only
+#         for i in range(total_cycles):
+#             if np.all(np.abs(peak_percent_difference[i:]) <= threshold_percent):
+#                 peak_stable_cycle = i + 1
+#                 break
+
+#         # RMS-only stability decision
+#         for i in range(total_cycles):
+
+#             cycle_number = i + 1
+
+#             if cycle_number < min_cycles_before_stable:
+#                 continue
+
+#             remaining_rms_errors = np.abs(rms_percent_difference[i:])
+
+#             enough_remaining_cycles = len(remaining_rms_errors) >= min_stable_cycles
+
+#             if enough_remaining_cycles and np.all(remaining_rms_errors <= threshold_percent):
+#                 rms_stable_cycle = cycle_number
+#                 break
+
+#         for i in range(total_cycles):
+
+#             if np.all(
+#                 np.abs(peak_percent_difference[i:]) <= threshold_percent
+#             ):
+#                 peak_stable_cycle = i + 1
+#                 break
+
+#         for i in range(total_cycles):
+
+#             if np.all(
+#                 np.abs(rms_percent_difference[i:]) <= threshold_percent
+#             ):
+#                 rms_stable_cycle = i + 1
+#                 break
+
+#         for i in range(total_cycles):
+
+#             if (
+#                 np.all(
+#                     np.abs(peak_percent_difference[i:])
+#                     <= threshold_percent
+#                 )
+#                 and
+#                 np.all(
+#                     np.abs(rms_percent_difference[i:])
+#                     <= threshold_percent
+#                 )
+#             ):
+#                 both_stable_cycle = i + 1
+#                 break
+
+#         summary_results.append({
+
+#             "File": file,
+#             "Target Force (N)": target_force,
+#             "Total Mechanical Cycles": total_cycles,
+#             "Total Voltage Peaks Used": len(rectified_peak_values),
+
+#             "Final Mean Rectified Peak (V)": final_peak_mean,
+#             "Final Rectified Peak STD (V)": np.std(
+#                 rectified_peak_values,
+#                 ddof=1
+#             ),
+#             "Final Rectified Peak CV (%)": (
+#                 np.std(rectified_peak_values, ddof=1)
+#                 / final_peak_mean
+#             ) * 100 if final_peak_mean != 0 else np.nan,
+
+#             "Final Mean RMS Rectified Voltage (V)": final_rms_mean,
+#             "Final RMS STD (V)": np.std(
+#                 cycle_rms_values,
+#                 ddof=1
+#             ),
+#             "Final RMS CV (%)": (
+#                 np.std(cycle_rms_values, ddof=1)
+#                 / final_rms_mean
+#             ) * 100 if final_rms_mean != 0 else np.nan,
+
+#             "Threshold (%)": threshold_percent,
+#             "Cycles Needed - Rectified Peak Reference Only": peak_stable_cycle,
+#             "Cycles Needed - RMS Stability Decision": rms_stable_cycle,
+#             "Stability Based On": "RMS only",
+#             "Threshold (%)": threshold_percent,
+#             "Minimum Stable Cycles Required": min_stable_cycles,
+#             "Minimum Cycles Before Stability Allowed": min_cycles_before_stable
+#         })
+
+#         force_label = int(round(target_force))
+
+#         # =================================================
+#         # PLOT 1: RUNNING MEAN PEAK + RUNNING RMS
+#         # =================================================
+
+#         plt.figure(figsize=(8, 5))
+
+#         plt.plot(
+#             range(1, total_cycles + 1),
+#             running_peak_mean,
+#             marker="o",
+#             label="Mean rectified peak"
+#         )
+
+#         plt.plot(
+#             range(1, total_cycles + 1),
+#             running_rms_mean,
+#             marker="o",
+#             label="Mean RMS rectified signal"
+#         )
+
+#         plt.axhline(
+#             final_peak_mean,
+#             linestyle="--",
+#             label="Final rectified peak mean"
+#         )
+
+#         plt.axhline(
+#             final_rms_mean,
+#             linestyle=":",
+#             label="Final RMS mean"
+#         )
+
+#         if not np.isnan(rms_stable_cycle):
+#             plt.axvline(
+#                 rms_stable_cycle,
+#                 linestyle="-.",
+#                 label=f"RMS stable: {rms_stable_cycle} cycles"
+#             )
+
+
+#         plt.xlabel("Number of Mechanical Cycles Included")
+#         plt.ylabel("Voltage (V)")
+#         plt.title(f"{force_label}N: voltage convergence")
+#         plt.legend()
+
+#         plt.tight_layout()
+
+#         plt.savefig(
+#             os.path.join(
+#                 folder_path,
+#                 f"{force_label}N_voltage_convergence.png"
+#             ),
+#             dpi=300
+#         )
+
+#         plt.close()
+
+#         # =================================================
+#         # PLOT 2: % DIFFERENCE FROM FINAL VALUE
+#         # =================================================
+
+#         plt.figure(figsize=(8, 5))
+
+#         plt.plot(
+#             range(1, total_cycles + 1),
+#             peak_percent_difference,
+#             marker="o",
+#             label="Rectified peak mean"
+#         )
+
+#         plt.plot(
+#             range(1, total_cycles + 1),
+#             rms_percent_difference,
+#             marker="o",
+#             label="RMS rectified signal"
+#         )
+
+#         plt.axhline(
+#             threshold_percent,
+#             linestyle="--"
+#         )
+
+#         plt.axhline(
+#             -threshold_percent,
+#             linestyle="--"
+#         )
+
+#         plt.axhline(
+#             0,
+#             linestyle=":"
+#         )
+
+#         if not np.isnan(rms_stable_cycle):
+#             plt.axvline(
+#                 rms_stable_cycle,
+#                 linestyle="-.",
+#                 label=f"RMS stable: {rms_stable_cycle} cycles"
+#             )
+
+
+#         plt.xlabel("Number of Mechanical Cycles Included")
+#         plt.ylabel("% Difference from Final Value")
+#         plt.title(
+#             f"{force_label}N: convergence within ±{threshold_percent}%"
+#         )
+#         plt.legend()
+
+#         plt.tight_layout()
+
+#         plt.savefig(
+#             os.path.join(
+#                 folder_path,
+#                 f"{force_label}N_voltage_percent_difference.png"
+#             ),
+#             dpi=300
+#         )
+
+#         plt.close()
+
+#         # =================================================
+#         # PLOT 3: 95% CONFIDENCE INTERVALS
+#         # =================================================
+
+#         plt.figure(figsize=(8, 5))
+
+#         plt.plot(
+#             range(1, total_cycles + 1),
+#             peak_ci_95,
+#             marker="o",
+#             label="Rectified peak mean 95% CI"
+#         )
+
+#         plt.plot(
+#             range(1, total_cycles + 1),
+#             rms_ci_95,
+#             marker="o",
+#             label="RMS rectified signal 95% CI"
+#         )
+
+#         if not np.isnan(rms_stable_cycle):
+#             plt.axvline(
+#                 rms_stable_cycle,
+#                 linestyle="-.",
+#                 label=f"RMS stable: {rms_stable_cycle} cycles"
+#             )
+
+#         plt.xlabel("Number of Mechanical Cycles Included")
+#         plt.ylabel("95% CI (V)")
+#         plt.title(f"{force_label}N: confidence interval vs cycle count")
+#         plt.legend()
+
+#         plt.tight_layout()
+
+#         plt.savefig(
+#             os.path.join(
+#                 folder_path,
+#                 f"{force_label}N_voltage_confidence_interval.png"
+#             ),
+#             dpi=300
+#         )
+
+#         plt.close()
+
+#     all_cycles_df = pd.DataFrame(all_cycle_results)
+#     summary_df = pd.DataFrame(summary_results)
+
+#     if len(summary_df) == 0:
+#         raise ValueError("No valid voltage convergence data found.")
+
+#     summary_df = summary_df.sort_values("Target Force (N)")
+
+#     output_excel = os.path.join(
+#         folder_path,
+#         "VOLTAGE_CYCLE_CONVERGENCE_ANALYSIS.xlsx"
+#     )
+
+#     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+
+#         all_cycles_df.to_excel(
+#             writer,
+#             sheet_name="ALL_CYCLES",
+#             index=False
+#         )
+
+#         summary_df.to_excel(
+#             writer,
+#             sheet_name="SUMMARY",
+#             index=False
+#         )
+
+#     print(f"Saved voltage convergence analysis:\n{output_excel}")
+
+#     return output_excel
 
 '''
 TRIBO OUTPUT FUNCTIONS
@@ -2771,6 +3334,53 @@ def read_target_force(file_path):
                     break
 
         return target_force
+
+def load_data(file_path):
+
+        data_start = 0
+
+        with open(file_path, "r") as f:
+
+            for i, line in enumerate(f):
+
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                if line.startswith("#"):
+                    continue
+
+                if "time" in line.lower():
+                    continue
+
+                data_start = i
+                break
+
+        df = pd.read_csv(
+            file_path,
+            sep=r"[\s,\t]+",
+            engine="python",
+            skiprows=data_start,
+            header=None
+        )
+
+        df = df.iloc[:, :3]
+        df.columns = ["time", "force", "voltage"]
+
+        df["time"] = pd.to_numeric(df["time"], errors="coerce")
+        df["force"] = pd.to_numeric(df["force"], errors="coerce")
+        df["voltage"] = pd.to_numeric(df["voltage"], errors="coerce")
+
+        df = df.dropna()
+
+        # remove isolated first-row time glitch
+        if len(df) > 1 and df["time"].iloc[0] > df["time"].iloc[1]:
+            df = df.iloc[1:]
+
+        df = df.reset_index(drop=True)
+
+        return df
 
 
 def load_force_data(file_path):
