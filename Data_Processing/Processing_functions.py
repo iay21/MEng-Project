@@ -13,16 +13,8 @@ RIG VALIDATION FUNCTIONS:
 
 def analyse_calibration_folder(folder_path):
 
-    # =====================================================
-    # STORAGE
-    # =====================================================
-
     all_cycle_data = []
     test_summary_data = []
-
-    # =====================================================
-    # FIND FILES
-    # =====================================================
 
     csv_files = sorted([
         f for f in os.listdir(folder_path)
@@ -34,23 +26,14 @@ def analyse_calibration_folder(folder_path):
     ])
 
     if len(csv_files) == 0:
-        raise ValueError(
-            "No CSV files found."
-        )
-
-    # =====================================================
-    # PROCESS EACH FILE
-    # =====================================================
+        raise ValueError("No CSV files found.")
 
     for file_index, file in enumerate(csv_files):
 
-        full_path = os.path.join(
-            folder_path,
-            file
-        )
+        full_path = os.path.join(folder_path, file)
 
         target_force = read_target_force(full_path)
-        
+
         if target_force is None:
             print(f"Skipping {file}: no target force found.")
             continue
@@ -60,29 +43,17 @@ def analyse_calibration_folder(folder_path):
         if len(df) == 0:
             continue
 
-        # keeps only the metrics needed for the force calibration
-        df = df = df[["time", "force"]].dropna()
-
-
-        # =================================================
-        # CONTACT / CYCLE DETECTION
-        # =================================================
+        # Keep only the columns needed for force calibration
+        df = df[["time", "force"]].dropna()
 
         cycles = find_cycles(df)
 
         if len(cycles) == 0:
             continue
 
-        # =================================================
-        # PEAK FORCE PER CYCLE
-        # =================================================
-
         peak_forces = []
 
-        for cycle_num, (start, end) in enumerate(
-            cycles,
-            start=1
-        ):
+        for cycle_num, (start, end) in enumerate(cycles, start=1):
 
             cycle = df.loc[start:end]
 
@@ -90,233 +61,129 @@ def analyse_calibration_folder(folder_path):
                 continue
 
             peak_force = cycle["force"].max()
-
             peak_forces.append(peak_force)
 
-            absolute_error = (peak_force - target_force)
-
+            absolute_error = peak_force - target_force
             percent_error = (absolute_error / target_force) * 100
 
             all_cycle_data.append({
-
                 "File": file,
-
                 "Target Force (N)": target_force,
-
                 "Cycle": cycle_num,
-
                 "Peak Force (N)": peak_force,
-
                 "Absolute Error (N)": absolute_error,
-
                 "Percent Error (%)": percent_error
             })
-
-        # =================================================
-        # SKIP IF NO VALID CYCLES
-        # =================================================
 
         if len(peak_forces) == 0:
             continue
 
-        peak_forces = np.array(
-            peak_forces
-        )
+        peak_forces = np.array(peak_forces)
 
-        # =================================================
-        # METRICS
-        # =================================================
+        mean_peak = np.mean(peak_forces)
 
-        mean_peak = np.mean(
-            peak_forces
-        )
-
-        std_peak = np.std(
-            peak_forces,
-            ddof=1
+        std_peak = (
+            np.std(peak_forces, ddof=1)
+            if len(peak_forces) > 1
+            else np.nan
         )
 
         cv_peak = (
-            std_peak / mean_peak
-        ) * 100
-
-        force_range = (
-            np.max(peak_forces)
-            -
-            np.min(peak_forces)
+            (std_peak / mean_peak) * 100
+            if mean_peak != 0 and not np.isnan(std_peak)
+            else np.nan
         )
 
-        abs_error = (
-            mean_peak - target_force
-        )
-
-        pct_error = (
-            abs_error / target_force
-        ) * 100
+        force_range = np.max(peak_forces) - np.min(peak_forces)
+        abs_error = mean_peak - target_force
+        pct_error = (abs_error / target_force) * 100
 
         rms_error = np.sqrt(
-            np.mean(
-                (peak_forces - target_force) ** 2
-            )
+            np.mean((peak_forces - target_force) ** 2)
         )
 
-        # =================================================
-        # SAVE SUMMARY
-        # =================================================
-
         test_summary_data.append({
-
             "File": file,
-
             "Target Force (N)": target_force,
-
             "Mean Peak Force (N)": mean_peak,
-
             "STD Peak Force (N)": std_peak,
-
             "CV (%)": cv_peak,
-
             "Range (N)": force_range,
-
             "Min Peak Force (N)": np.min(peak_forces),
-
             "Max Peak Force (N)": np.max(peak_forces),
-
             "Absolute Error (N)": abs_error,
-
             "Percent Error (%)": pct_error,
-
             "RMS Error (N)": rms_error
         })
 
-        # =================================================
-        # DRIFT PLOT
-        # =================================================
-
-        plt.figure(figsize=(7,5))
+        # Drift plot
+        plt.figure(figsize=(7, 5))
 
         plt.plot(
-            range(1, len(peak_forces)+1),
+            range(1, len(peak_forces) + 1),
             peak_forces,
             marker="o"
         )
 
-        plt.axhline(
-            target_force,
-            linestyle="--"
-        )
+        plt.axhline(target_force, linestyle="--")
 
         plt.xlabel("Cycle Number")
-
         plt.ylabel("Peak Force (N)")
-
-        plt.title(
-            f"{int(target_force)}N Calibration Drift"
-        )
+        plt.title(f"{int(target_force)}N Calibration Drift")
 
         plt.tight_layout()
 
         plt.savefig(
-            os.path.join(
-                folder_path,
-                f"{int(target_force)}N_Drift.png"
-            ),
+            os.path.join(folder_path, f"{int(target_force)}N_Drift.png"),
             dpi=300
         )
 
         plt.close()
 
-        # =================================================
-        # INDIVIDUAL BOXPLOT
-        # =================================================
+        # Individual boxplot
+        plt.figure(figsize=(4, 6))
 
-        plt.figure(figsize=(4,6))
-
-        plt.boxplot(
-            peak_forces
-        )
-
-        plt.axhline(
-            target_force,
-            linestyle="--"
-        )
+        plt.boxplot(peak_forces)
+        plt.axhline(target_force, linestyle="--")
 
         plt.ylabel("Peak Force (N)")
-
-        plt.title(
-            f"{int(target_force)}N Repeatability"
-        )
+        plt.title(f"{int(target_force)}N Repeatability")
 
         plt.tight_layout()
 
         plt.savefig(
-            os.path.join(
-                folder_path,
-                f"{int(target_force)}N_Boxplot.png"
-            ),
+            os.path.join(folder_path, f"{int(target_force)}N_Boxplot.png"),
             dpi=300
         )
 
         plt.close()
 
-    # =====================================================
-    # CREATE DATAFRAMES
-    # =====================================================
-
-    all_cycles_df = pd.DataFrame(
-        all_cycle_data
-    )
-
-    test_summary_df = pd.DataFrame(
-        test_summary_data
-    )
+    all_cycles_df = pd.DataFrame(all_cycle_data)
+    test_summary_df = pd.DataFrame(test_summary_data)
 
     if len(test_summary_df) == 0:
-        raise ValueError(
-            "No valid calibration data."
-        )
-
-    # =====================================================
-    # FORCE SUMMARY
-    # =====================================================
+        raise ValueError("No valid calibration data.")
 
     force_summary_df = test_summary_df.groupby(
         "Target Force (N)"
     ).agg({
-
         "Mean Peak Force (N)": "mean",
-
         "STD Peak Force (N)": "mean",
-
         "CV (%)": "mean",
-
         "Range (N)": "mean",
-
         "Absolute Error (N)": "mean",
-
         "Percent Error (%)": "mean",
-
         "RMS Error (N)": "mean"
-
     }).reset_index()
 
-    force_summary_df = force_summary_df.sort_values(
-        "Target Force (N)"
-    )
-
-    # =====================================================
-    # SAVE EXCEL
-    # =====================================================
+    force_summary_df = force_summary_df.sort_values("Target Force (N)")
 
     output_excel = os.path.join(
         folder_path,
         "CALIBRATION_ANALYSIS.xlsx"
     )
 
-    with pd.ExcelWriter(
-        output_excel,
-        engine="openpyxl"
-    ) as writer:
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
 
         all_cycles_df.to_excel(
             writer,
@@ -336,225 +203,109 @@ def analyse_calibration_folder(folder_path):
             index=False
         )
 
-    # =====================================================
-    # MEASURED VS TARGET
-    # =====================================================
-
-    plt.figure(figsize=(6,5))
+    # Measured vs target
+    plt.figure(figsize=(6, 5))
 
     plt.plot(
-        force_summary_df[
-            "Target Force (N)"
-        ],
-        force_summary_df[
-            "Mean Peak Force (N)"
-        ],
+        force_summary_df["Target Force (N)"],
+        force_summary_df["Mean Peak Force (N)"],
         marker="o",
         label="Measured"
     )
 
     plt.plot(
-        force_summary_df[
-            "Target Force (N)"
-        ],
-        force_summary_df[
-            "Target Force (N)"
-        ],
+        force_summary_df["Target Force (N)"],
+        force_summary_df["Target Force (N)"],
         linestyle="--",
         label="Ideal"
     )
 
     plt.xlabel("Target Force (N)")
-
     plt.ylabel("Measured Force (N)")
-
     plt.title("Measured vs Target Force")
-
     plt.legend()
 
     plt.tight_layout()
 
     plt.savefig(
-        os.path.join(
-            folder_path,
-            "Measured_vs_Target.png"
-        ),
+        os.path.join(folder_path, "Measured_vs_Target.png"),
         dpi=300
     )
 
     plt.close()
 
-    # =====================================================
-    # PERCENT ERROR
-    # =====================================================
+    def plot_force_summary(y_col, ylabel, title, filename):
 
-    plt.figure(figsize=(6,5))
+        plt.figure(figsize=(6, 5))
 
-    plt.plot(
-        force_summary_df[
-            "Target Force (N)"
-        ],
-        force_summary_df[
-            "Percent Error (%)"
-        ],
-        marker="o"
+        plt.plot(
+            force_summary_df["Target Force (N)"],
+            force_summary_df[y_col],
+            marker="o"
+        )
+
+        plt.xlabel("Target Force (N)")
+        plt.ylabel(ylabel)
+        plt.title(title)
+
+        plt.tight_layout()
+
+        plt.savefig(
+            os.path.join(folder_path, filename),
+            dpi=300
+        )
+
+        plt.close()
+
+    plot_force_summary(
+        "Percent Error (%)",
+        "Percent Error (%)",
+        "Calibration Percent Error",
+        "Percent_Error.png"
     )
 
-    plt.xlabel("Target Force (N)")
-
-    plt.ylabel("Percent Error (%)")
-
-    plt.title("Calibration Percent Error")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "Percent_Error.png"
-        ),
-        dpi=300
+    plot_force_summary(
+        "STD Peak Force (N)",
+        "STD (N)",
+        "Calibration Repeatability",
+        "STD_vs_Force.png"
     )
 
-    plt.close()
-
-    # =====================================================
-    # STD VS FORCE
-    # =====================================================
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        force_summary_df[
-            "Target Force (N)"
-        ],
-        force_summary_df[
-            "STD Peak Force (N)"
-        ],
-        marker="o"
+    plot_force_summary(
+        "CV (%)",
+        "CV (%)",
+        "Coefficient of Variation",
+        "CV_vs_Force.png"
     )
 
-    plt.xlabel("Target Force (N)")
-
-    plt.ylabel("STD (N)")
-
-    plt.title("Calibration Repeatability")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "STD_vs_Force.png"
-        ),
-        dpi=300
+    plot_force_summary(
+        "RMS Error (N)",
+        "RMS Error (N)",
+        "Calibration RMS Error",
+        "RMS_vs_Force.png"
     )
 
-    plt.close()
-
-    # =====================================================
-    # CV VS FORCE
-    # =====================================================
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        force_summary_df[
-            "Target Force (N)"
-        ],
-        force_summary_df[
-            "CV (%)"
-        ],
-        marker="o"
-    )
-
-    plt.xlabel("Target Force (N)")
-
-    plt.ylabel("CV (%)")
-
-    plt.title("Coefficient of Variation")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "CV_vs_Force.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    # =====================================================
-    # RMS ERROR
-    # =====================================================
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        force_summary_df[
-            "Target Force (N)"
-        ],
-        force_summary_df[
-            "RMS Error (N)"
-        ],
-        marker="o"
-    )
-
-    plt.xlabel("Target Force (N)")
-
-    plt.ylabel("RMS Error (N)")
-
-    plt.title("Calibration RMS Error")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "RMS_vs_Force.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    print(
-        f"\nSaved calibration analysis:\n"
-        f"{output_excel}"
-    )
+    print(f"\nSaved calibration analysis:\n{output_excel}")
 
     return output_excel
 
+
 def analyse_force_cycles(file, target_force=None):
 
-    # =====================================================
-    # LOAD DATA
-    # =====================================================
+    if target_force is None:
+        target_force = read_target_force(file)
+
+    if target_force is None:
+        raise ValueError(
+            "No target force found in metadata. Please enter a target force manually."
+        )
+
     df = load_data(file)
 
     if len(df) == 0:
-        continue
+        return pd.DataFrame()
 
-        # keeps only the metrics needed for the force calibration
-    df = df = df[["time", "force"]].dropna()
-
-    target_force = read_target_force(file)
-    # =====================================================
-    # CHECK TARGET FORCE
-    # =====================================================
-
-    if target_force is None:
-
-        raise ValueError(
-            "No target force found in metadata.\n"
-            "Please enter a target force manually."
-        )
-
-    # =====================================================
-    # FIND CONTACT REGIONS
-    # =====================================================
+    df = df[["time", "force"]].dropna()
 
     cycles = find_cycles(df)
 
@@ -563,10 +314,6 @@ def analyse_force_cycles(file, target_force=None):
     if len(cycles) == 0:
         return pd.DataFrame(results)
 
-    # =====================================================
-    # ANALYSE EACH CONTACT EVENT
-    # =====================================================
-
     for i, (start, end) in enumerate(cycles):
 
         cycle = df.loc[start:end]
@@ -574,57 +321,34 @@ def analyse_force_cycles(file, target_force=None):
         if len(cycle) < MIN_CYCLE_POINTS:
             continue
 
-        # -------------------------------------------------
-        # BASIC FORCE METRICS
-        # -------------------------------------------------
-
         max_force = cycle["force"].max()
-
         min_force = cycle["force"].min()
 
-        # -------------------------------------------------
-        # STEADY-STATE REGION
-        # Use points above 80% of max force
-        # -------------------------------------------------
-
-        steady_region = cycle[
-            cycle["force"] > (0.8 * max_force)
-        ]
-
-        # fallback if too few points
-        if len(steady_region) < 3:
-            steady_region = cycle
+        steady_region, steady_method, steady_start_time, steady_end_time = find_steady_force_region(
+            cycle,
+            target_force
+        )
 
         steady_force = steady_region["force"].mean()
-
         steady_force_std = steady_region["force"].std()
 
-        # -------------------------------------------------
-        # RMS ERROR (steady-state only)
-        # -------------------------------------------------
-
-        steady_error = (
-            steady_region["force"] - target_force
-        )
+        steady_error = steady_region["force"] - target_force
 
         rms_error = np.sqrt(
             np.mean(steady_error ** 2)
         )
-
-        # -------------------------------------------------
-        # TIMING METRICS
-        # -------------------------------------------------
 
         contact_duration = (
             cycle["time"].iloc[-1]
             - cycle["time"].iloc[0]
         )
 
-        # cycle frequency from start-to-start
-        if i < len(cycle_starts) - 1:
+        if i < len(cycles) - 1:
+
+            next_start = cycles[i + 1][0]
 
             next_start_time = df.loc[
-                cycle_starts[i + 1],
+                next_start,
                 "time"
             ]
 
@@ -633,9 +357,7 @@ def analyse_force_cycles(file, target_force=None):
                 "time"
             ]
 
-            full_cycle_time = (
-                next_start_time - current_start_time
-            )
+            full_cycle_time = next_start_time - current_start_time
 
             frequency_hz = (
                 1 / full_cycle_time
@@ -647,41 +369,24 @@ def analyse_force_cycles(file, target_force=None):
             full_cycle_time = np.nan
             frequency_hz = np.nan
 
-        # -------------------------------------------------
-        # SAVE RESULTS
-        # -------------------------------------------------
-
         results.append({
-
             "cycle": i + 1,
-
             "target_force_N": target_force,
-
             "max_force_N": max_force,
-
             "min_force_N": min_force,
-
             "steady_force_N": steady_force,
-
             "steady_force_std_N": steady_force_std,
-
+            "steady_method": steady_method,
+            "steady_start_time_s": steady_start_time,
+            "steady_end_time_s": steady_end_time,
             "rms_error_N": rms_error,
-
             "contact_duration_s": contact_duration,
-
             "full_cycle_time_s": full_cycle_time,
-
             "frequency_hz": frequency_hz
         })
 
-    # =====================================================
-    # CREATE OUTPUT TABLE
-    # =====================================================
+    return pd.DataFrame(results)
 
-    results_df = pd.DataFrame(results)
-
-
-    return results_df
 
 def full_frequency_force_analysis(master_folder):
 
@@ -1059,6 +764,7 @@ def full_frequency_force_analysis(master_folder):
 
     return output_file
 
+
 def analyse_force_control_method(method_folder):
 
     method_name = os.path.basename(method_folder)
@@ -1087,7 +793,10 @@ def analyse_force_control_method(method_folder):
             print(f"Skipping {file}: no target force found.")
             continue
 
-        df = load_force_data(file_path)
+        df = load_data(file_path)
+        df = df[["time", "force"]].dropna()
+        
+
 
         if len(df) == 0:
             continue
@@ -1582,11 +1291,8 @@ def analyse_force_control_method(method_folder):
 
     return output_excel
 
+
 def compare_force_control_methods_simple(master_folder):
-    import os
-    import pandas as pd
-    import numpy as np
-    import matplotlib.pyplot as plt
 
     method_folders = sorted([
         f for f in os.listdir(master_folder)
@@ -1796,9 +1502,8 @@ def compare_force_control_methods_simple(master_folder):
 
     return output_excel
 
-def compare_force_control_methods(
-    master_folder,
-):
+
+def compare_force_control_methods(master_folder):
 
     method_folders = sorted([
         f for f in os.listdir(master_folder)
@@ -1947,6 +1652,7 @@ def compare_force_control_methods(
     print(f"Saved steady force-control method comparison:\n{output_excel}")
 
     return output_excel
+
 
 def analyse_voltage_cycle_convergence(
     folder_path,
@@ -2362,31 +2068,12 @@ def analyse_voltage_cycle_convergence(
 TRIBO OUTPUT FUNCTIONS
 '''
 
-def plot_force_voltage_vs_time(file_path):
+def plot_test_signals_vs_time(file_path):
 
-    
     df = load_data(file_path)
 
     if len(df) == 0:
         raise ValueError("No valid data found.")
-
-    # =========================
-    # REMOVE OUT-OF-ORDER TIME POINTS
-    # =========================
-    # This removes glitches such as:
-    # 80s followed by 0.1s
-
-    bad_rows = df.index[
-        df["time"].shift(-1) < df["time"]
-    ]
-
-    df = df.drop(bad_rows)
-
-    df = df.reset_index(drop=True)
-
-    # =========================
-    # TRIM TO ACTIVE TEST REGION
-    # =========================
 
     active_df = df[
         df["force"] > 0.1
@@ -2403,17 +2090,12 @@ def plot_force_voltage_vs_time(file_path):
             (df["time"] <= end_time)
         ]
 
-    # =========================
-    # PLOT
-    # =========================
-
     fig, ax1 = plt.subplots(figsize=(25, 10))
 
     ax1.plot(
         df["time"],
         df["force"],
         color="red",
-        # linestyle="--",
         label="Force"
     )
 
@@ -2421,18 +2103,59 @@ def plot_force_voltage_vs_time(file_path):
     ax1.set_ylabel("Force (N)", color="red")
     ax1.tick_params(axis="y", labelcolor="red")
 
-    ax2 = ax1.twinx()
+    axes = [ax1]
+    lines = ax1.get_lines()
 
-    ax2.plot(
-        df["time"],
-        df["voltage"],
-        color="blue",
-        linestyle="dotted",
-        label="Voltage"
+    if "voltage" in df.columns:
+
+        ax2 = ax1.twinx()
+
+        ax2.plot(
+            df["time"],
+            df["voltage"],
+            color="blue",
+            linestyle="dotted",
+            label="Voltage"
+        )
+
+        ax2.set_ylabel("Voltage (V)", color="blue")
+        ax2.tick_params(axis="y", labelcolor="blue")
+
+        axes.append(ax2)
+        lines += ax2.get_lines()
+
+    if "current" in df.columns:
+
+        ax3 = ax1.twinx()
+
+        ax3.spines["right"].set_position(
+            ("outward", 70)
+        )
+
+        ax3.plot(
+            df["time"],
+            df["current"],
+            color="green",
+            linestyle="--",
+            label="Current"
+        )
+
+        ax3.set_ylabel("Current (A)", color="green")
+        ax3.tick_params(axis="y", labelcolor="green")
+
+        axes.append(ax3)
+        lines += ax3.get_lines()
+
+    labels = [
+        line.get_label()
+        for line in lines
+    ]
+
+    ax1.legend(
+        lines,
+        labels,
+        loc="best"
     )
-
-    ax2.set_ylabel("Voltage (V)", color="blue")
-    ax2.tick_params(axis="y", labelcolor="blue")
 
     base_name = os.path.basename(file_path)
     name_no_ext = os.path.splitext(base_name)[0]
@@ -2441,7 +2164,7 @@ def plot_force_voltage_vs_time(file_path):
 
     output_file = os.path.join(
         os.path.dirname(file_path),
-        f"{name_no_ext}_force_voltage_plot.png"
+        f"{name_no_ext}_force_voltage_current_plot.png"
     )
 
     plt.tight_layout()
@@ -2451,6 +2174,12 @@ def plot_force_voltage_vs_time(file_path):
     print(f"Saved plot:\n{output_file}")
 
     return output_file
+
+
+# Optional alias so old GUI/buttons still work
+def plot_force_voltage_vs_time(file_path):
+    return plot_test_signals_vs_time(file_path)
+
 
 def analyse_impedance_folder(folder_path):
 
@@ -2467,21 +2196,9 @@ def analyse_impedance_folder(folder_path):
     if len(csv_files) == 0:
         raise ValueError("No CSV files found.")
 
-    def read_load_resistance(file_path):
-
-        with open(file_path, "r") as f:
-            for line in f:
-
-                if "# Load Resistance (Ohm)" in line:
-                    parts = line.strip().split(",")
-
-                    if len(parts) >= 2:
-                        return float(parts[1])
-
-                if "time" in line.lower():
-                    break
-
-        return None
+    # =====================================================
+    # RESISTANCE LABELS
+    # =====================================================
 
     def resistance_label(resistance):
 
@@ -2497,9 +2214,78 @@ def analyse_impedance_folder(folder_path):
         else:
             return f"{resistance:g}"
 
+    # =====================================================
+    # CYCLE INSTANTANEOUS POWER
+    # =====================================================
+
+    def calculate_cycle_power_metrics(df):
+
+        df = df.copy()
+
+        df["instantaneous_power"] = (
+            df["voltage"] * df["current"]
+        )
+
+        cycles = find_cycles(df)
+
+        cycle_max_abs_powers = []
+
+        for start, end in cycles:
+
+            cycle = df.loc[start:end]
+
+            if len(cycle) < MIN_CYCLE_POINTS:
+                continue
+
+            max_abs_power = np.max(
+                np.abs(cycle["instantaneous_power"])
+            )
+
+            cycle_max_abs_powers.append(max_abs_power)
+
+        if len(cycle_max_abs_powers) == 0:
+
+            return {
+                "mean_cycle_max_abs_power": np.nan,
+                "std_cycle_max_abs_power": np.nan,
+                "overall_max_abs_power": np.nan,
+                "n_cycles": 0
+            }
+
+        return {
+
+            "mean_cycle_max_abs_power": np.mean(
+                cycle_max_abs_powers
+            ),
+
+            "std_cycle_max_abs_power": (
+                np.std(
+                    cycle_max_abs_powers,
+                    ddof=1
+                )
+                if len(cycle_max_abs_powers) > 1
+                else np.nan
+            ),
+
+            "overall_max_abs_power": np.max(
+                cycle_max_abs_powers
+            ),
+
+            "n_cycles": len(
+                cycle_max_abs_powers
+            )
+        }
+
+    # =====================================================
+    # PROCESS FILES
+    # =====================================================
+
     for file in csv_files:
 
-        file_path = os.path.join(folder_path, file)
+        file_path = os.path.join(
+            folder_path,
+            file
+        )
 
         resistance = read_load_resistance(file_path)
 
@@ -2516,43 +2302,130 @@ def analyse_impedance_folder(folder_path):
             print(f"Skipping {file}: no voltage column found.")
             continue
 
-        if "current" not in df.columns:
+        if "current_A" not in df.columns:
             print(f"Skipping {file}: no current column found.")
             continue
 
-        voltage_peak_stats, voltage_rms = calculate_voltage_metrics(df)
+        # =================================================
+        # VOLTAGE METRICS
+        # =================================================
 
-        current_peak_stats, current_rms = calculate_current_metrics(df)
+        voltage_peak_stats, voltage_rms = (
+            calculate_voltage_metrics(df)
+        )
 
-        power_from_peak = (
+        # =================================================
+        # CURRENT METRICS
+        # =================================================
+
+        current_peak_stats, current_rms = (
+            calculate_current_metrics(df)
+        )
+
+        # =================================================
+        # POWER METRICS
+        # =================================================
+
+        peak_power = (
             voltage_peak_stats["mean_peak"]
             *
             current_peak_stats["mean_peak"]
         )
 
-        power_from_rms = voltage_rms * current_rms
+        rms_power = (
+            voltage_rms
+            *
+            current_rms
+        )
+
+        cycle_power_stats = (
+            calculate_cycle_power_metrics(df)
+        )
 
         results.append({
 
             "File": file,
 
             "Load Resistance (Ohm)": resistance,
-            "Load Resistance Label": resistance_label(resistance),
 
-            "Cycles Analysed Voltage": voltage_peak_stats["n_cycles"],
-            "Cycles Analysed Current": current_peak_stats["n_cycles"],
+            "Load Resistance Label": resistance_label(
+                resistance
+            ),
 
-            "Mean Vpeak (V)": voltage_peak_stats["mean_peak"],
-            "STD Vpeak (V)": voltage_peak_stats["std_peak"],
+            # ---------------------------------------------
+            # Voltage
+            # ---------------------------------------------
+
+            "Cycles Analysed Voltage": (
+                voltage_peak_stats["n_cycles"]
+            ),
+
+            "Mean Vpeak (V)": (
+                voltage_peak_stats["mean_peak"]
+            ),
+
+            "STD Vpeak (V)": (
+                voltage_peak_stats["std_peak"]
+            ),
+
             "Vrms (V)": voltage_rms,
 
-            "Mean Ipeak (A)": current_peak_stats["mean_peak"],
-            "STD Ipeak (A)": current_peak_stats["std_peak"],
+            # ---------------------------------------------
+            # Current
+            # ---------------------------------------------
+
+            "Cycles Analysed Current": (
+                current_peak_stats["n_cycles"]
+            ),
+
+            "Mean Ipeak (A)": (
+                current_peak_stats["mean_peak"]
+            ),
+
+            "STD Ipeak (A)": (
+                current_peak_stats["std_peak"]
+            ),
+
             "Irms (A)": current_rms,
 
-            "Peak Power P=IV (W)": power_from_peak,
-            "RMS Power P=IV (W)": power_from_rms
+            # ---------------------------------------------
+            # Power
+            # ---------------------------------------------
+
+            "Peak Power Vpeak*Ipeak (W)": (
+                peak_power
+            ),
+
+            "RMS Power Vrms*Irms (W)": (
+                rms_power
+            ),
+
+            "Mean Cycle Max Instantaneous Power max(|V*I|) (W)": (
+                cycle_power_stats[
+                    "mean_cycle_max_abs_power"
+                ]
+            ),
+
+            "STD Cycle Max Instantaneous Power max(|V*I|) (W)": (
+                cycle_power_stats[
+                    "std_cycle_max_abs_power"
+                ]
+            ),
+
+            "Overall Max Instantaneous Power max(|V*I|) (W)": (
+                cycle_power_stats[
+                    "overall_max_abs_power"
+                ]
+            ),
+
+            "Cycles Analysed Power": (
+                cycle_power_stats["n_cycles"]
+            )
         })
+
+    # =====================================================
+    # CREATE SUMMARY TABLE
+    # =====================================================
 
     summary_df = pd.DataFrame(results)
 
@@ -2562,6 +2435,10 @@ def analyse_impedance_folder(folder_path):
     summary_df = summary_df.sort_values(
         "Load Resistance (Ohm)"
     ).reset_index(drop=True)
+
+    # =====================================================
+    # SAVE EXCEL
+    # =====================================================
 
     output_excel = os.path.join(
         folder_path,
@@ -2580,183 +2457,364 @@ def analyse_impedance_folder(folder_path):
         )
 
     # =====================================================
-    # MAX POWER POINT
+    # GENERIC PLOTTING FUNCTION
     # =====================================================
 
-    max_power_idx = summary_df["RMS Power P=IV (W)"].idxmax()
+    def make_impedance_plot(
+        voltage_col,
+        current_col,
+        power_col,
+        title,
+        filename,
+        voltage_label,
+        current_label,
+        power_label
+    ):
 
-    max_power_R = summary_df.loc[
-        max_power_idx,
-        "Load Resistance (Ohm)"
-    ]
+        max_power_idx = summary_df[
+            power_col
+        ].idxmax()
 
-    max_power_label = summary_df.loc[
-        max_power_idx,
-        "Load Resistance Label"
-    ]
+        max_power_R = summary_df.loc[
+            max_power_idx,
+            "Load Resistance (Ohm)"
+        ]
 
-    max_power = summary_df.loc[
-        max_power_idx,
-        "RMS Power P=IV (W)"
-    ]
+        max_power_label = summary_df.loc[
+            max_power_idx,
+            "Load Resistance Label"
+        ]
+
+        max_power = summary_df.loc[
+            max_power_idx,
+            power_col
+        ]
+
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+
+        ax1.set_xscale("log")
+
+        # -------------------------------------------------
+        # Voltage
+        # -------------------------------------------------
+
+        voltage_line, = ax1.plot(
+            summary_df["Load Resistance (Ohm)"],
+            summary_df[voltage_col],
+            marker="o",
+            color="tab:blue",
+            label=voltage_label
+        )
+
+        ax1.set_xlabel(
+            "Load Resistance (Ohm)"
+        )
+
+        ax1.set_ylabel(
+            "Voltage (V)",
+            color="tab:blue"
+        )
+
+        ax1.tick_params(
+            axis="y",
+            labelcolor="tab:blue"
+        )
+
+        # -------------------------------------------------
+        # Current
+        # -------------------------------------------------
+
+        ax2 = ax1.twinx()
+
+        current_line, = ax2.plot(
+            summary_df["Load Resistance (Ohm)"],
+            summary_df[current_col],
+            marker="s",
+            color="tab:orange",
+            label=current_label
+        )
+
+        ax2.set_ylabel(
+            "Current (A)",
+            color="tab:orange"
+        )
+
+        ax2.tick_params(
+            axis="y",
+            labelcolor="tab:orange"
+        )
+
+        # -------------------------------------------------
+        # Power
+        # -------------------------------------------------
+
+        ax3 = ax1.twinx()
+
+        ax3.spines["right"].set_position(
+            ("outward", 70)
+        )
+
+        power_line, = ax3.plot(
+            summary_df["Load Resistance (Ohm)"],
+            summary_df[power_col],
+            marker="^",
+            linestyle=":",
+            linewidth=2,
+            color="tab:green",
+            label=power_label
+        )
+
+        ax3.set_ylabel(
+            "Power (W)",
+            color="tab:green"
+        )
+
+        ax3.tick_params(
+            axis="y",
+            labelcolor="tab:green"
+        )
+
+        # -------------------------------------------------
+        # Max Power Marker
+        # -------------------------------------------------
+
+        ax1.axvline(
+            max_power_R,
+            color="black",
+            linestyle="--",
+            linewidth=1.5
+        )
+
+        ax3.annotate(
+            (
+                f"Max power\n"
+                f"R = {max_power_label}\n"
+                f"P = {max_power:.3e} W"
+            ),
+            xy=(max_power_R, max_power),
+            xytext=(10, 25),
+            textcoords="offset points",
+            arrowprops=dict(
+                arrowstyle="->",
+                color="black"
+            ),
+            fontsize=9,
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                fc="white",
+                ec="black",
+                alpha=0.8
+            )
+        )
+
+        # -------------------------------------------------
+        # Legend
+        # -------------------------------------------------
+
+        lines = [
+            voltage_line,
+            current_line,
+            power_line
+        ]
+
+        labels = [
+            line.get_label()
+            for line in lines
+        ]
+
+        ax1.legend(
+            lines,
+            labels,
+            loc="best"
+        )
+
+        ax1.grid(
+            True,
+            which="both",
+            linestyle="--",
+            alpha=0.4
+        )
+
+        plt.title(title)
+
+        plt.tight_layout()
+
+        plot_path = os.path.join(
+            folder_path,
+            filename
+        )
+
+        plt.savefig(
+            plot_path,
+            dpi=300
+        )
+
+        plt.close()
+
+        return (
+            plot_path,
+            max_power_label,
+            max_power
+        )
 
     # =====================================================
-    # COMBINED RMS VOLTAGE, CURRENT, POWER PLOT
+    # PEAK IMPEDANCE PLOT
     # =====================================================
 
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    peak_plot, peak_R_label, peak_power_max = (
+        make_impedance_plot(
 
-    ax1.set_xscale("log")
+            voltage_col="Mean Vpeak (V)",
 
-    voltage_line, = ax1.plot(
-        summary_df["Load Resistance (Ohm)"],
-        summary_df["Vrms (V)"],
-        marker="o",
-        color="tab:blue",
-        label="Vrms (V)"
-    )
+            current_col="Mean Ipeak (A)",
 
-    ax1.set_xlabel("Load Resistance (Ohm)")
-    ax1.set_ylabel("Vrms (V)", color="tab:blue")
-    ax1.tick_params(axis="y", labelcolor="tab:blue")
+            power_col="Mean Cycle Max Instantaneous Power max(|V*I|) (W)",
 
-    ax2 = ax1.twinx()
+            title="Impedance Matching Using Peak Values",
 
-    current_line, = ax2.plot(
-        summary_df["Load Resistance (Ohm)"],
-        summary_df["Irms (A)"],
-        marker="s",
-        color="tab:orange",
-        label="Irms (A)"
-    )
+            filename="Impedance_Peak_Voltage_Current_Power.png",
 
-    ax2.set_ylabel("Irms (A)", color="tab:orange")
-    ax2.tick_params(axis="y", labelcolor="tab:orange")
+            voltage_label="Mean Vpeak (V)",
 
-    ax3 = ax1.twinx()
+            current_label="Mean Ipeak (A)",
 
-    ax3.spines["right"].set_position(("outward", 70))
-
-    power_line, = ax3.plot(
-        summary_df["Load Resistance (Ohm)"],
-        summary_df["RMS Power P=IV (W)"],
-        marker="^",
-        linestyle=":",
-        linewidth=2,
-        color="tab:green",
-        label="Power P = IV (W)"
-    )
-
-    ax3.set_ylabel("Power (W)", color="tab:green")
-    ax3.tick_params(axis="y", labelcolor="tab:green")
-
-    ax1.axvline(
-        max_power_R,
-        color="black",
-        linestyle="--",
-        linewidth=1.5
-    )
-
-    ax3.annotate(
-        f"Max power\nR = {max_power_label}\nP = {max_power:.3e} W",
-        xy=(max_power_R, max_power),
-        xytext=(10, 25),
-        textcoords="offset points",
-        arrowprops=dict(arrowstyle="->", color="black"),
-        fontsize=10,
-        bbox=dict(
-            boxstyle="round,pad=0.3",
-            fc="white",
-            ec="black",
-            alpha=0.8
+            power_label="Mean Cycle Max |V×I| (W)"
         )
     )
 
-    lines = [
-        voltage_line,
-        current_line,
-        power_line
-    ]
+    # =====================================================
+    # RMS IMPEDANCE PLOT
+    # =====================================================
 
-    labels = [
-        line.get_label()
-        for line in lines
-    ]
+    rms_plot, rms_R_label, rms_power_max = (
+        make_impedance_plot(
 
-    ax1.legend(
-        lines,
-        labels,
-        loc="best"
+            voltage_col="Vrms (V)",
+
+            current_col="Irms (A)",
+
+            power_col="RMS Power Vrms*Irms (W)",
+
+            title="Impedance Matching Using RMS Values",
+
+            filename="Impedance_RMS_Voltage_Current_Power.png",
+
+            voltage_label="Vrms (V)",
+
+            current_label="Irms (A)",
+
+            power_label="RMS Power Vrms×Irms (W)"
+        )
     )
 
-    ax1.grid(
-        True,
-        which="both",
-        linestyle="--",
-        alpha=0.4
+    # =====================================================
+    # FINISH
+    # =====================================================
+
+    print(
+        f"Saved impedance analysis:\n"
+        f"{output_excel}"
     )
 
-    plt.title(
-        "Impedance Matching: Voltage, Current and Power"
+    print(
+        f"Saved peak impedance plot:\n"
+        f"{peak_plot}"
     )
 
-    plt.tight_layout()
-
-    combined_plot = os.path.join(
-        folder_path,
-        "Impedance_RMS_Voltage_Current_Power.png"
+    print(
+        f"Saved RMS impedance plot:\n"
+        f"{rms_plot}"
     )
 
-    plt.savefig(
-        combined_plot,
-        dpi=300
+    print(
+        f"Maximum peak power at "
+        f"{peak_R_label}: "
+        f"{peak_power_max:.3e} W"
     )
 
-    plt.close()
-
-    print(f"Saved impedance analysis:\n{output_excel}")
-    print(f"Saved combined plot:\n{combined_plot}")
-    print(f"Maximum RMS power at {max_power_label}: {max_power:.3e} W")
+    print(
+        f"Maximum RMS power at "
+        f"{rms_R_label}: "
+        f"{rms_power_max:.3e} W"
+    )
 
     return output_excel
 
+
 '''
-Data processing functions
+DATA PROCESSING FUNCTIONS
 '''
+
+INA_GAIN = 989
+SHUNT_RESISTOR = 1e6  # 1 MΩ
+
+contact_start_threshold = 0.5
+contact_end_threshold = 0.2
+
+
+def amplified_voltage_to_current(amplified_voltage):
+    """
+    Converts PCB amplified current-output voltage back to real current in amps.
+
+    I = Vout / (INA gain * shunt resistance)
+    """
+    return amplified_voltage / (INA_GAIN * SHUNT_RESISTOR)
+
 
 def read_target_force(file_path):
+    target_force = None
 
-        target_force = None
+    with open(file_path, "r") as f:
+        for line in f:
 
-        with open(file_path, "r") as f:
-            for line in f:
+            if "# Target Force (N)" in line:
+                parts = line.strip().split(",")
 
-                if "# Target Force (N)" in line:
-                    parts = line.strip().split(",")
+                if len(parts) >= 2:
+                    try:
+                        target_force = float(parts[1])
+                    except:
+                        pass
 
-                    if len(parts) >= 2:
-                        try:
-                            target_force = float(parts[1])
-                        except:
-                            pass
+            if "time" in line.lower():
+                break
 
-                if "time" in line.lower():
-                    break
+    return target_force
 
-        return target_force
+
+def read_load_resistance(file_path):
+    load_resistance = None
+
+    with open(file_path, "r") as f:
+        for line in f:
+
+            if "# Load Resistance (Ohm)" in line:
+                parts = line.strip().split(",")
+
+                if len(parts) >= 2:
+                    try:
+                        load_resistance = float(parts[1])
+                    except:
+                        pass
+
+            if "time" in line.lower():
+                break
+
+    return load_resistance
+
 
 def load_data(file_path):
     """
     Loads old or new CSV files.
 
-    Expected old format:
+    Old format:
         time, force, voltage
 
-    Expected new dual format:
-        time, force, voltage, current
+    New dual format:
+        time, force, voltage, current_signal
 
-    The current column is assumed to be the amplified PCB current-output voltage.
-    It is converted into real current in amps.
+    current_signal is the raw amplified PCB voltage.
+    current is the converted real current in amps.
     """
 
     data_start = 0
@@ -2779,95 +2837,60 @@ def load_data(file_path):
 
     df = pd.read_csv(
         file_path,
-        sep=r"[\s,\t]+",
+        sep=r"[\s,\t,]+",
         engine="python",
         skiprows=data_start,
         header=None
     )
 
-    # Keep only expected columns
     if df.shape[1] >= 4:
         df = df.iloc[:, :4]
-        df.columns = ["time", "force", "voltage", "current_signal"]
+        df.columns = [
+            "time",
+            "force",
+            "voltage",
+            "current_A"
+        ]
 
     elif df.shape[1] >= 3:
         df = df.iloc[:, :3]
-        df.columns = ["time", "force", "voltage"]
+        df.columns = [
+            "time",
+            "force",
+            "voltage"
+        ]
 
     elif df.shape[1] >= 2:
         df = df.iloc[:, :2]
-        df.columns = ["time", "force"]
+        df.columns = [
+            "time",
+            "force"
+        ]
 
     else:
         raise ValueError(f"Not enough columns in {file_path}")
 
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df = df.dropna()
-
-    # Remove isolated first-row time glitch
-    if len(df) > 1 and df["time"].iloc[0] > df["time"].iloc[1]:
-        df = df.iloc[1:]
-
-    df = df.reset_index(drop=True)
-
-    # Convert amplified current-output voltage to real current
-    if "current_signal" in df.columns:
-        df["current"] = amplified_voltage_to_current(
-            df["current_signal"]
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
         )
+
+    df = df.dropna().reset_index(drop=True)
+
+    # Remove any out-of-order time glitches
+    if "time" in df.columns:
+        bad_rows = df.index[
+            df["time"].shift(-1) < df["time"]
+        ]
+
+        df = df.drop(bad_rows).reset_index(drop=True)
+
+    # Convert amplified current signal to real current
+    if "current_signal" in df.columns:
+        df["current"] = df["current_A"]
 
     return df
-
-def load_force_data(file_path):
-
-        data_start = 0
-
-        with open(file_path, "r") as f:
-            for i, line in enumerate(f):
-
-                line = line.strip()
-
-                if not line:
-                    continue
-
-                if line.startswith("#"):
-                    continue
-
-                if "time" in line.lower():
-                    continue
-
-                data_start = i
-                break
-
-        df = pd.read_csv(
-            file_path,
-            sep=r"[\s,\t]+",
-            engine="python",
-            skiprows=data_start,
-            header=None
-        )
-
-        df = df.iloc[:, :2]
-        df.columns = ["time", "force"]
-
-        df["time"] = pd.to_numeric(df["time"], errors="coerce")
-        df["force"] = pd.to_numeric(df["force"], errors="coerce")
-
-        df = df.dropna()
-
-        # remove isolated first-row time glitch
-        if len(df) > 1 and df["time"].iloc[0] > df["time"].iloc[1]:
-            df = df.iloc[1:]
-
-        df = df.reset_index(drop=True)
-
-        return df
-
-
-contact_start_threshold = 0.5
-contact_end_threshold = 0.2
 
 
 def find_cycles(
@@ -2877,35 +2900,26 @@ def find_cycles(
     end_threshold=contact_end_threshold
 ):
     """
-    Detects contact cycles using hysteresis thresholds.
+    Detects contact cycles using hysteresis.
 
-    Contact begins when force rises above start_threshold.
-    Contact ends when force falls below end_threshold.
+    Start contact:
+        force >= start_threshold
 
-    Returns:
-        List of (start_index, end_index) tuples.
+    End contact:
+        force <= end_threshold
     """
 
     cycles = []
-
     in_contact = False
     start_index = None
 
     for idx, force in zip(df.index, df[force_col]):
 
-        if (
-            not in_contact
-            and force >= start_threshold
-        ):
-
+        if not in_contact and force >= start_threshold:
             in_contact = True
             start_index = idx
 
-        elif (
-            in_contact
-            and force <= end_threshold
-        ):
-
+        elif in_contact and force <= end_threshold:
             in_contact = False
             end_index = idx
 
@@ -2918,45 +2932,7 @@ def find_cycles(
 
     return cycles
 
-# def find_cycles(df):
-#         cycles = []
-#         in_contact = False
-#         start_index = None
 
-#         for idx, force in zip(df.index, df["force"]):
-
-#             if not in_contact and force >= contact_start_threshold:
-#                 in_contact = True
-#                 start_index = idx
-
-#             elif in_contact and force <= contact_end_threshold:
-#                 in_contact = False
-#                 end_index = idx
-
-#                 if start_index is not None:
-#                     cycles.append((start_index, end_index))
-
-#                 start_index = None
-
-#         return cycles
-
-
-def detect_mad_outliers(values, threshold=4.0):
-
-        values = np.array(values)
-
-        if len(values) < 4:
-            return np.zeros(len(values), dtype=bool)
-
-        median = np.median(values)
-        mad = np.median(np.abs(values - median))
-
-        if mad == 0:
-            return np.zeros(len(values), dtype=bool)
-
-        modified_z_score = 0.6745 * (values - median) / mad
-
-        return np.abs(modified_z_score) > threshold
 
 def find_steady_force_region(
     cycle_df,
@@ -3089,11 +3065,25 @@ def find_steady_force_region(
 
     return steady_region, steady_method, steady_start_time, steady_end_time
 
+def detect_mad_outliers(values, threshold=4.0):
+
+        values = np.array(values)
+
+        if len(values) < 4:
+            return np.zeros(len(values), dtype=bool)
+
+        median = np.median(values)
+        mad = np.median(np.abs(values - median))
+
+        if mad == 0:
+            return np.zeros(len(values), dtype=bool)
+
+        modified_z_score = 0.6745 * (values - median) / mad
+
+        return np.abs(modified_z_score) > threshold
+
 
 def baseline_correct_signal(signal, baseline_method="zero"):
-    """
-    Applies optional baseline correction to a signal.
-    """
 
     signal = np.asarray(signal, dtype=float)
 
@@ -3115,44 +3105,21 @@ def baseline_correct_signal(signal, baseline_method="zero"):
 def calculate_mean_cycle_spike(
     df,
     signal_col,
-    force_col="force",
-    force_threshold=FORCE_THRESHOLD,
     baseline_method="zero"
 ):
     """
     Calculates mean rectified peak amplitude per cycle.
-
-    For each force-detected cycle:
-    - baseline correct signal
-    - find positive peak
-    - find negative peak magnitude
-    - average positive and negative peak
-    - return mean/std across cycles
     """
 
-    df = df.dropna(subset=[force_col, signal_col]).copy()
+    df = df.dropna(
+        subset=["force", signal_col]
+    ).copy()
 
-    df["contact"] = df[force_col] > force_threshold
-
-    df["cycle_start"] = (
-        df["contact"]
-        &
-        ~df["contact"].shift(1).fillna(False)
-    )
-
-    cycle_starts = df.index[df["cycle_start"]].tolist()
+    cycles = find_cycles(df)
 
     cycle_peaks = []
 
-    for i in range(len(cycle_starts)):
-
-        start = cycle_starts[i]
-
-        end = (
-            cycle_starts[i + 1]
-            if i + 1 < len(cycle_starts)
-            else df.index[-1]
-        )
+    for start, end in cycles:
 
         cycle = df.loc[start:end]
 
@@ -3196,10 +3163,6 @@ def calculate_rms(
     signal_col,
     baseline_method="zero"
 ):
-    """
-    Calculates whole-file RMS for a selected signal column.
-    """
-
     signal = df[signal_col].dropna().to_numpy()
 
     corrected = baseline_correct_signal(
@@ -3207,7 +3170,9 @@ def calculate_rms(
         baseline_method=baseline_method
     )
 
-    return np.sqrt(np.mean(corrected ** 2))
+    return np.sqrt(
+        np.mean(corrected ** 2)
+    )
 
 
 def calculate_signal_metrics(
@@ -3215,15 +3180,9 @@ def calculate_signal_metrics(
     signal_col,
     baseline_method="zero"
 ):
-    """
-    Returns both cycle peak stats and whole-file RMS for one signal.
-    """
-
     peak_stats = calculate_mean_cycle_spike(
         df,
         signal_col=signal_col,
-        force_col="force",
-        force_threshold=FORCE_THRESHOLD,
         baseline_method=baseline_method
     )
 
@@ -3235,6 +3194,7 @@ def calculate_signal_metrics(
 
     return peak_stats, rms_value
 
+
 def calculate_voltage_metrics(df):
     return calculate_signal_metrics(
         df,
@@ -3244,316 +3204,13 @@ def calculate_voltage_metrics(df):
 
 
 def calculate_current_metrics(df):
+    
     return calculate_signal_metrics(
         df,
         signal_col="current",
         baseline_method="median"
     )
 
-'''
-IN PROGRESS - NOT FINALIZED
-'''
-
-
-def force_only_analysis(folder_path):
-
-    import os
-    import pandas as pd
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    # =====================================================
-    # STORAGE
-    # =====================================================
-
-    summary_data = []
-
-    # =====================================================
-    # FIND CSV FILES
-    # =====================================================
-
-    csv_files = sorted([
-        f for f in os.listdir(folder_path)
-        if (
-            f.endswith(".csv")
-            and "_analysis" not in f
-            and "_analysed" not in f
-        )
-    ])
-
-    if len(csv_files) == 0:
-        raise ValueError(
-            "No CSV files found."
-        )
-
-    # =====================================================
-    # PROCESS FILES
-    # =====================================================
-
-    for file in csv_files:
-
-        full_path = os.path.join(
-            folder_path,
-            file
-        )
-
-        try:
-
-            # =============================================
-            # RUN FORCE ANALYSIS
-            # =============================================
-
-            results_df = analyse_force_cycles(
-                full_path
-            )
-
-            if len(results_df) == 0:
-                continue
-
-            # =============================================
-            # EXTRACT METRICS
-            # =============================================
-
-            target_force = int(round(
-                results_df[
-                    "target_force_N"
-                ].iloc[0]
-            ))
-
-            mean_force = results_df[
-                "steady_force_N"
-            ].mean()
-
-            abs_error = (
-                mean_force - target_force
-            )
-
-            percent_error = (
-                abs_error / target_force
-            ) * 100
-
-            mean_std = results_df[
-                "steady_force_std_N"
-            ].mean()
-
-            mean_rms = results_df[
-                "rms_error_N"
-            ].mean()
-
-            summary_data.append({
-
-                "Target Force (N)": target_force,
-
-                "Mean Force (N)": mean_force,
-
-                "Absolute Error (N)": abs_error,
-
-                "Percent Error (%)": percent_error,
-
-                "STD (N)": mean_std,
-
-                "RMS Error (N)": mean_rms
-            })
-
-        except Exception as e:
-
-            print(f"Failed: {file}")
-            print(e)
-
-    # =====================================================
-    # CREATE DATAFRAME
-    # =====================================================
-
-    results_df = pd.DataFrame(
-        summary_data
-    )
-
-    if len(results_df) == 0:
-        raise ValueError(
-            "No valid data processed."
-        )
-
-    # =====================================================
-    # GROUP REPEATS
-    # =====================================================
-
-    grouped_df = results_df.groupby(
-        "Target Force (N)"
-    ).agg({
-
-        "Mean Force (N)": "mean",
-
-        "Absolute Error (N)": "mean",
-
-        "Percent Error (%)": "mean",
-
-        "STD (N)": "mean",
-
-        "RMS Error (N)": "mean"
-
-    }).reset_index()
-
-    grouped_df = grouped_df.sort_values(
-        "Target Force (N)"
-    )
-
-    # =====================================================
-    # SAVE EXCEL
-    # =====================================================
-
-    output_excel = os.path.join(
-        folder_path,
-        "FORCE_ONLY_ANALYSIS.xlsx"
-    )
-
-    with pd.ExcelWriter(
-        output_excel,
-        engine="openpyxl"
-    ) as writer:
-
-        results_df.to_excel(
-            writer,
-            sheet_name="ALL_RESULTS",
-            index=False
-        )
-
-        grouped_df.to_excel(
-            writer,
-            sheet_name="SUMMARY",
-            index=False
-        )
-
-    # =====================================================
-    # PLOTS
-    # =====================================================
-
-    # -----------------------------------------------------
-    # TARGET VS MEAN FORCE
-    # -----------------------------------------------------
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        grouped_df["Target Force (N)"],
-        grouped_df["Mean Force (N)"],
-        marker="o"
-    )
-
-    plt.plot(
-        grouped_df["Target Force (N)"],
-        grouped_df["Target Force (N)"],
-        linestyle="--"
-    )
-
-    plt.xlabel("Target Force (N)")
-    plt.ylabel("Measured Force (N)")
-    plt.title("Target vs Measured Force")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "Target_vs_Measured_Force.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    # -----------------------------------------------------
-    # PERCENT ERROR
-    # -----------------------------------------------------
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        grouped_df["Target Force (N)"],
-        grouped_df["Percent Error (%)"],
-        marker="o"
-    )
-
-    plt.xlabel("Target Force (N)")
-    plt.ylabel("Percent Error (%)")
-    plt.title("Percent Error")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "Percent_Error.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    # -----------------------------------------------------
-    # STD
-    # -----------------------------------------------------
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        grouped_df["Target Force (N)"],
-        grouped_df["STD (N)"],
-        marker="o"
-    )
-
-    plt.xlabel("Target Force (N)")
-    plt.ylabel("STD (N)")
-    plt.title("Force Stability")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "Force_STD.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    # -----------------------------------------------------
-    # RMS ERROR
-    # -----------------------------------------------------
-
-    plt.figure(figsize=(6,5))
-
-    plt.plot(
-        grouped_df["Target Force (N)"],
-        grouped_df["RMS Error (N)"],
-        marker="o"
-    )
-
-    plt.xlabel("Target Force (N)")
-    plt.ylabel("RMS Error (N)")
-    plt.title("RMS Force Error")
-
-    plt.tight_layout()
-
-    plt.savefig(
-        os.path.join(
-            folder_path,
-            "RMS_Error.png"
-        ),
-        dpi=300
-    )
-
-    plt.close()
-
-    print(f"Saved analysis:\n{output_excel}")
-
-    return output_excel
-
-
-
-
-
-def analyse_force_repeatability(folder_path):
 
 
     FORCE_THRESHOLD = 0.5
@@ -4058,3 +3715,72 @@ def analyse_force_repeatability(folder_path):
     )
 
     return output_excel
+
+def calculate_cycle_instantaneous_power_metrics(df):
+    """
+    Calculates cycle-based instantaneous power metrics.
+
+    Uses simultaneously logged voltage and current:
+
+        P(t) = V(t) * I(t)
+
+    For each cycle:
+        - calculate instantaneous power
+        - take max absolute instantaneous power
+
+    Returns:
+        mean/std/max across cycles.
+    """
+
+    if "voltage" not in df.columns or "current" not in df.columns:
+        return {
+            "mean_cycle_max_abs_power": np.nan,
+            "std_cycle_max_abs_power": np.nan,
+            "overall_max_abs_power": np.nan,
+            "n_cycles": 0,
+            "cycle_max_abs_powers": []
+        }
+
+    df = df.copy()
+
+    df["instantaneous_power"] = (
+        df["voltage"] * df["current"]
+    )
+
+    cycles = find_cycles(df)
+
+    cycle_max_abs_powers = []
+
+    for start, end in cycles:
+
+        cycle = df.loc[start:end]
+
+        if len(cycle) < MIN_CYCLE_POINTS:
+            continue
+
+        max_abs_power = np.max(
+            np.abs(cycle["instantaneous_power"])
+        )
+
+        cycle_max_abs_powers.append(max_abs_power)
+
+    if len(cycle_max_abs_powers) == 0:
+        return {
+            "mean_cycle_max_abs_power": np.nan,
+            "std_cycle_max_abs_power": np.nan,
+            "overall_max_abs_power": np.nan,
+            "n_cycles": 0,
+            "cycle_max_abs_powers": []
+        }
+
+    return {
+        "mean_cycle_max_abs_power": np.mean(cycle_max_abs_powers),
+        "std_cycle_max_abs_power": (
+            np.std(cycle_max_abs_powers, ddof=1)
+            if len(cycle_max_abs_powers) > 1
+            else np.nan
+        ),
+        "overall_max_abs_power": np.max(cycle_max_abs_powers),
+        "n_cycles": len(cycle_max_abs_powers),
+        "cycle_max_abs_powers": cycle_max_abs_powers
+    }
