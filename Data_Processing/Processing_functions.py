@@ -18,7 +18,6 @@ def analyse_calibration_folder(folder_path):
     # =====================================================
 
     all_cycle_data = []
-
     test_summary_data = []
 
     # =====================================================
@@ -50,111 +49,29 @@ def analyse_calibration_folder(folder_path):
             file
         )
 
-        # =================================================
-        # READ TARGET FORCE
-        # =================================================
-
         target_force = read_target_force(full_path)
+        
+        if target_force is None:
+            print(f"Skipping {file}: no target force found.")
+            continue
 
-        # =================================================
-        # FIND DATA START
-        # =================================================
-
-        data_start = 0
-
-        with open(full_path, "r") as f:
-
-            for i, line in enumerate(f):
-
-                line = line.strip()
-
-                if not line:
-                    continue
-
-                if line.startswith("#"):
-                    continue
-
-                if "time" in line.lower():
-                    continue
-
-                data_start = i
-                break
-
-        # =================================================
-        # LOAD DATA
-        # =================================================
-
-        df = pd.read_csv(
-            full_path,
-            sep=r"[\s,\t]+",
-            engine="python",
-            skiprows=data_start,
-            header=None
-        )
-
-        df = df.iloc[:, :2]
-
-        df.columns = [
-            "time",
-            "force"
-        ]
-
-        df["force"] = pd.to_numeric(
-            df["force"],
-            errors="coerce"
-        )
-
-        df["time"] = pd.to_numeric(
-            df["time"],
-            errors="coerce"
-        )
-
-        df = df.dropna()
+        df = load_data(full_path)
 
         if len(df) == 0:
             continue
 
+        # keeps only the metrics needed for the force calibration
+        df = df = df[["time", "force"]].dropna()
+
+
         # =================================================
-        # CONTACT DETECTION
+        # CONTACT / CYCLE DETECTION
         # =================================================
 
-        df["contact"] = (
-            df["force"] > FORCE_THRESHOLD
-        )
+        cycles = find_cycles(df)
 
-        df["contact_shift"] = (
-            df["contact"].shift(1)
-        )
-
-        cycle_starts = df[
-            (df["contact"] == True)
-            &
-            (df["contact_shift"] == False)
-        ].index.tolist()
-
-        cycle_ends = df[
-            (df["contact"] == False)
-            &
-            (df["contact_shift"] == True)
-        ].index.tolist()
-
-        if (
-            len(cycle_starts) == 0
-            or
-            len(cycle_ends) == 0
-        ):
+        if len(cycles) == 0:
             continue
-
-        if cycle_ends[0] < cycle_starts[0]:
-            cycle_ends.pop(0)
-
-        min_len = min(
-            len(cycle_starts),
-            len(cycle_ends)
-        )
-
-        cycle_starts = cycle_starts[:min_len]
-        cycle_ends = cycle_ends[:min_len]
 
         # =================================================
         # PEAK FORCE PER CYCLE
@@ -163,7 +80,7 @@ def analyse_calibration_folder(folder_path):
         peak_forces = []
 
         for cycle_num, (start, end) in enumerate(
-            zip(cycle_starts, cycle_ends),
+            cycles,
             start=1
         ):
 
@@ -172,21 +89,13 @@ def analyse_calibration_folder(folder_path):
             if len(cycle) < MIN_CYCLE_POINTS:
                 continue
 
-            peak_force = cycle[
-                "force"
-            ].max()
+            peak_force = cycle["force"].max()
 
-            peak_forces.append(
-                peak_force
-            )
+            peak_forces.append(peak_force)
 
-            absolute_error = (
-                peak_force - target_force
-            )
+            absolute_error = (peak_force - target_force)
 
-            percent_error = (
-                absolute_error / target_force
-            ) * 100
+            percent_error = (absolute_error / target_force) * 100
 
             all_cycle_data.append({
 
@@ -620,83 +529,18 @@ def analyse_calibration_folder(folder_path):
 
 def analyse_force_cycles(file, target_force=None):
 
-
-    # =====================================================
-    # READ TARGET FORCE FROM METADATA
-    # =====================================================
-
-    if target_force is None:
-
-        with open(file, "r") as f:
-
-            for line in f:
-
-                if "# Target Force (N)" in line:
-
-                    parts = line.strip().split(",")
-
-                    if len(parts) >= 2:
-
-                        try:
-                            target_force = float(parts[1])
-
-                        except:
-                            pass
-
-                # stop once data header is reached
-                if line.startswith("time_s"):
-                    break
-
     # =====================================================
     # LOAD DATA
     # =====================================================
+    df = load_data(file)
 
-    # find where numeric data begins
-    data_start = 0
+    if len(df) == 0:
+        continue
 
-    with open(file, "r") as f:
+        # keeps only the metrics needed for the force calibration
+    df = df = df[["time", "force"]].dropna()
 
-        for i, line in enumerate(f):
-
-            line = line.strip()
-
-            # skip blank lines
-            if not line:
-                continue
-
-            # skip metadata
-            if line.startswith("#"):
-                continue
-
-            # skip column headers
-            if "time" in line.lower():
-                continue
-
-            # first numeric line found
-            data_start = i
-            break
-
-    # load numeric data
-    df = pd.read_csv(
-        file,
-        sep=r"[\s,\t]+",
-        engine="python",
-        skiprows=data_start,
-        header=None
-    )
-
-    # keep only first 2 columns
-    df = df.iloc[:, :2]
-
-    df.columns = ["time", "force"]
-
-    # convert to numeric
-    df["time"] = pd.to_numeric(df["time"], errors="coerce")
-    df["force"] = pd.to_numeric(df["force"], errors="coerce")
-
-    # remove invalid rows
-    df = df.dropna()
-
+    target_force = read_target_force(file)
     # =====================================================
     # CHECK TARGET FORCE
     # =====================================================
@@ -707,45 +551,23 @@ def analyse_force_cycles(file, target_force=None):
             "No target force found in metadata.\n"
             "Please enter a target force manually."
         )
-    
+
     # =====================================================
     # FIND CONTACT REGIONS
     # =====================================================
 
-    df["contact"] = df["force"] > FORCE_THRESHOLD
-
-    df["contact_shift"] = df["contact"].shift(1)
-
-    # start of contact
-    cycle_starts = df[
-        (df["contact"] == True) &
-        (df["contact_shift"] == False)
-    ].index.tolist()
-
-    # end of contact
-    cycle_ends = df[
-        (df["contact"] == False) &
-        (df["contact_shift"] == True)
-    ].index.tolist()
-
-    # align starts/ends safely
-    if len(cycle_ends) > 0 and len(cycle_starts) > 0:
-
-        if cycle_ends[0] < cycle_starts[0]:
-            cycle_ends.pop(0)
-
-        min_len = min(len(cycle_starts), len(cycle_ends))
-
-        cycle_starts = cycle_starts[:min_len]
-        cycle_ends = cycle_ends[:min_len]
+    cycles = find_cycles(df)
 
     results = []
+
+    if len(cycles) == 0:
+        return pd.DataFrame(results)
 
     # =====================================================
     # ANALYSE EACH CONTACT EVENT
     # =====================================================
 
-    for i, (start, end) in enumerate(zip(cycle_starts, cycle_ends)):
+    for i, (start, end) in enumerate(cycles):
 
         cycle = df.loc[start:end]
 
@@ -2543,28 +2365,7 @@ TRIBO OUTPUT FUNCTIONS
 def plot_force_voltage_vs_time(file_path):
 
     
-    # =========================
-    # LOAD DATA
-    # =========================
-
-    df = pd.read_csv(
-        file_path,
-        comment="#"
-    )
-
-    df = df.iloc[:, :3]
-
-    df.columns = [
-        "time",
-        "force",
-        "voltage"
-    ]
-
-    df["time"] = pd.to_numeric(df["time"], errors="coerce")
-    df["force"] = pd.to_numeric(df["force"], errors="coerce")
-    df["voltage"] = pd.to_numeric(df["voltage"], errors="coerce")
-
-    df = df.dropna()
+    df = load_data(file_path)
 
     if len(df) == 0:
         raise ValueError("No valid data found.")
@@ -2651,7 +2452,6 @@ def plot_force_voltage_vs_time(file_path):
 
     return output_file
 
-
 def analyse_impedance_folder(folder_path):
 
     results = []
@@ -2683,22 +2483,6 @@ def analyse_impedance_folder(folder_path):
 
         return None
 
-    def read_measurement_mode(file_path):
-
-        with open(file_path, "r") as f:
-            for line in f:
-
-                if "# Measurement Mode" in line:
-                    parts = line.strip().split(",")
-
-                    if len(parts) >= 2:
-                        return parts[1].strip().upper()
-
-                if "time" in line.lower():
-                    break
-
-        return None
-
     def resistance_label(resistance):
 
         if resistance >= 1e9:
@@ -2718,14 +2502,9 @@ def analyse_impedance_folder(folder_path):
         file_path = os.path.join(folder_path, file)
 
         resistance = read_load_resistance(file_path)
-        measurement_mode = read_measurement_mode(file_path)
 
         if resistance is None:
             print(f"Skipping {file}: no load resistance found.")
-            continue
-
-        if measurement_mode is None:
-            print(f"Skipping {file}: no measurement mode found.")
             continue
 
         df = load_data(file_path)
@@ -2733,61 +2512,47 @@ def analyse_impedance_folder(folder_path):
         if len(df) == 0:
             continue
 
-        # =================================================
-        # USE NEW REUSABLE FUNCTIONS
-        # =================================================
-
-        if measurement_mode == "VOLTAGE":
-
-            peak_stats = calculate_mean_voltage(df)
-            rms_value = calculate_rms_voltage(df)
-
-            results.append({
-
-                "File": file,
-                "Measurement Mode": measurement_mode,
-
-                "Load Resistance (Ohm)": resistance,
-                "Load Resistance Label": resistance_label(resistance),
-
-                "Cycles Analysed": peak_stats["n_cycles"],
-
-                "Mean Vpeak (V)": peak_stats["mean_peak"],
-                "STD Vpeak (V)": peak_stats["std_peak"],
-                "Vrms (V)": rms_value,
-
-                "Mean Ipeak (A)": np.nan,
-                "STD Ipeak (A)": np.nan,
-                "Irms (A)": np.nan,
-            })
-
-        elif measurement_mode == "CURRENT":
-
-            peak_stats = calculate_mean_current(df)
-            rms_value = calculate_rms_current(df)
-
-            results.append({
-
-                "File": file,
-                "Measurement Mode": measurement_mode,
-
-                "Load Resistance (Ohm)": resistance,
-                "Load Resistance Label": resistance_label(resistance),
-
-                "Cycles Analysed": peak_stats["n_cycles"],
-
-                "Mean Vpeak (V)": np.nan,
-                "STD Vpeak (V)": np.nan,
-                "Vrms (V)": np.nan,
-
-                "Mean Ipeak (A)": peak_stats["mean_peak"],
-                "STD Ipeak (A)": peak_stats["std_peak"],
-                "Irms (A)": rms_value,
-            })
-
-        else:
-            print(f"Skipping {file}: unknown measurement mode {measurement_mode}")
+        if "voltage" not in df.columns:
+            print(f"Skipping {file}: no voltage column found.")
             continue
+
+        if "current" not in df.columns:
+            print(f"Skipping {file}: no current column found.")
+            continue
+
+        voltage_peak_stats, voltage_rms = calculate_voltage_metrics(df)
+
+        current_peak_stats, current_rms = calculate_current_metrics(df)
+
+        power_from_peak = (
+            voltage_peak_stats["mean_peak"]
+            *
+            current_peak_stats["mean_peak"]
+        )
+
+        power_from_rms = voltage_rms * current_rms
+
+        results.append({
+
+            "File": file,
+
+            "Load Resistance (Ohm)": resistance,
+            "Load Resistance Label": resistance_label(resistance),
+
+            "Cycles Analysed Voltage": voltage_peak_stats["n_cycles"],
+            "Cycles Analysed Current": current_peak_stats["n_cycles"],
+
+            "Mean Vpeak (V)": voltage_peak_stats["mean_peak"],
+            "STD Vpeak (V)": voltage_peak_stats["std_peak"],
+            "Vrms (V)": voltage_rms,
+
+            "Mean Ipeak (A)": current_peak_stats["mean_peak"],
+            "STD Ipeak (A)": current_peak_stats["std_peak"],
+            "Irms (A)": current_rms,
+
+            "Peak Power P=IV (W)": power_from_peak,
+            "RMS Power P=IV (W)": power_from_rms
+        })
 
     summary_df = pd.DataFrame(results)
 
@@ -2796,7 +2561,7 @@ def analyse_impedance_folder(folder_path):
 
     summary_df = summary_df.sort_values(
         "Load Resistance (Ohm)"
-    )
+    ).reset_index(drop=True)
 
     output_excel = os.path.join(
         folder_path,
@@ -2814,356 +2579,146 @@ def analyse_impedance_folder(folder_path):
             index=False
         )
 
-    voltage_df = summary_df[
-        summary_df["Measurement Mode"] == "VOLTAGE"
+    # =====================================================
+    # MAX POWER POINT
+    # =====================================================
+
+    max_power_idx = summary_df["RMS Power P=IV (W)"].idxmax()
+
+    max_power_R = summary_df.loc[
+        max_power_idx,
+        "Load Resistance (Ohm)"
     ]
 
-    current_df = summary_df[
-        summary_df["Measurement Mode"] == "CURRENT"
+    max_power_label = summary_df.loc[
+        max_power_idx,
+        "Load Resistance Label"
+    ]
+
+    max_power = summary_df.loc[
+        max_power_idx,
+        "RMS Power P=IV (W)"
     ]
 
     # =====================================================
-    # PLOT 1: VOLTAGE PEAK + RMS
+    # COMBINED RMS VOLTAGE, CURRENT, POWER PLOT
     # =====================================================
 
-    if len(voltage_df) > 0:
+    fig, ax1 = plt.subplots(figsize=(10, 6))
 
-        plt.figure(figsize=(8, 5))
+    ax1.set_xscale("log")
 
-        plt.plot(
-            voltage_df["Load Resistance (Ohm)"],
-            voltage_df["Mean Vpeak (V)"],
-            marker="o",
-            label="Mean Vpeak"
+    voltage_line, = ax1.plot(
+        summary_df["Load Resistance (Ohm)"],
+        summary_df["Vrms (V)"],
+        marker="o",
+        color="tab:blue",
+        label="Vrms (V)"
+    )
+
+    ax1.set_xlabel("Load Resistance (Ohm)")
+    ax1.set_ylabel("Vrms (V)", color="tab:blue")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+    ax2 = ax1.twinx()
+
+    current_line, = ax2.plot(
+        summary_df["Load Resistance (Ohm)"],
+        summary_df["Irms (A)"],
+        marker="s",
+        color="tab:orange",
+        label="Irms (A)"
+    )
+
+    ax2.set_ylabel("Irms (A)", color="tab:orange")
+    ax2.tick_params(axis="y", labelcolor="tab:orange")
+
+    ax3 = ax1.twinx()
+
+    ax3.spines["right"].set_position(("outward", 70))
+
+    power_line, = ax3.plot(
+        summary_df["Load Resistance (Ohm)"],
+        summary_df["RMS Power P=IV (W)"],
+        marker="^",
+        linestyle=":",
+        linewidth=2,
+        color="tab:green",
+        label="Power P = IV (W)"
+    )
+
+    ax3.set_ylabel("Power (W)", color="tab:green")
+    ax3.tick_params(axis="y", labelcolor="tab:green")
+
+    ax1.axvline(
+        max_power_R,
+        color="black",
+        linestyle="--",
+        linewidth=1.5
+    )
+
+    ax3.annotate(
+        f"Max power\nR = {max_power_label}\nP = {max_power:.3e} W",
+        xy=(max_power_R, max_power),
+        xytext=(10, 25),
+        textcoords="offset points",
+        arrowprops=dict(arrowstyle="->", color="black"),
+        fontsize=10,
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            fc="white",
+            ec="black",
+            alpha=0.8
         )
+    )
 
-        plt.plot(
-            voltage_df["Load Resistance (Ohm)"],
-            voltage_df["Vrms (V)"],
-            marker="o",
-            label="Vrms"
-        )
+    lines = [
+        voltage_line,
+        current_line,
+        power_line
+    ]
 
-        plt.xscale("log")
+    labels = [
+        line.get_label()
+        for line in lines
+    ]
 
-        plt.xlabel("Load Resistance (Ohm)")
-        plt.ylabel("Voltage (V)")
-        plt.title("Impedance Matching: Voltage")
-        plt.legend()
-        plt.tight_layout()
+    ax1.legend(
+        lines,
+        labels,
+        loc="best"
+    )
 
-        plt.savefig(
-            os.path.join(
-                folder_path,
-                "Impedance_Voltage_Vpeak_Vrms.png"
-            ),
-            dpi=300
-        )
+    ax1.grid(
+        True,
+        which="both",
+        linestyle="--",
+        alpha=0.4
+    )
 
-        plt.close()
+    plt.title(
+        "Impedance Matching: Voltage, Current and Power"
+    )
 
-    # =====================================================
-    # PLOT 2: CURRENT PEAK + RMS
-    # =====================================================
+    plt.tight_layout()
 
-    if len(current_df) > 0:
+    combined_plot = os.path.join(
+        folder_path,
+        "Impedance_RMS_Voltage_Current_Power.png"
+    )
 
-        plt.figure(figsize=(8, 5))
+    plt.savefig(
+        combined_plot,
+        dpi=300
+    )
 
-        plt.plot(
-            current_df["Load Resistance (Ohm)"],
-            current_df["Mean Ipeak (A)"],
-            marker="o",
-            label="Mean Ipeak"
-        )
-
-        plt.plot(
-            current_df["Load Resistance (Ohm)"],
-            current_df["Irms (A)"],
-            marker="o",
-            label="Irms"
-        )
-
-        plt.xscale("log")
-
-        plt.xlabel("Load Resistance (Ohm)")
-        plt.ylabel("Current (A)")
-        plt.title("Impedance Matching: Current")
-        plt.legend()
-        plt.tight_layout()
-
-        plt.savefig(
-            os.path.join(
-                folder_path,
-                "Impedance_Current_Ipeak_Irms.png"
-            ),
-            dpi=300
-        )
-
-        plt.close()
-
-    # =====================================================
-    # PLOT 3: COMBINED PEAK VOLTAGE + CURRENT
-    # =====================================================
-
-    if len(voltage_df) > 0 and len(current_df) > 0:
-
-        fig, ax1 = plt.subplots(figsize=(8, 5))
-
-        ax1.plot(
-            voltage_df["Load Resistance (Ohm)"],
-            voltage_df["Mean Vpeak (V)"],
-            marker="o",
-            label="Mean Vpeak"
-        )
-
-        ax1.set_xscale("log")
-        ax1.set_xlabel("Load Resistance (Ohm)")
-        ax1.set_ylabel("Mean Vpeak (V)")
-
-        ax2 = ax1.twinx()
-
-        ax2.plot(
-            current_df["Load Resistance (Ohm)"],
-            current_df["Mean Ipeak (A)"],
-            marker="o",
-            label="Mean Ipeak"
-        )
-
-        ax2.set_ylabel("Mean Ipeak (A)")
-
-        plt.title("Impedance Matching: Peak Voltage and Current")
-        plt.tight_layout()
-
-        plt.savefig(
-            os.path.join(
-                folder_path,
-                "Impedance_Peak_Voltage_Current.png"
-            ),
-            dpi=300
-        )
-
-        plt.close()
-
-    # =====================================================
-    # PLOT 4: COMBINED RMS VOLTAGE + CURRENT
-    # =====================================================
-
-    if len(voltage_df) > 0 and len(current_df) > 0:
-
-        fig, ax1 = plt.subplots(figsize=(8, 5))
-
-        ax1.plot(
-            voltage_df["Load Resistance (Ohm)"],
-            voltage_df["Vrms (V)"],
-            marker="o",
-            label="Vrms"
-        )
-
-        ax1.set_xscale("log")
-        ax1.set_xlabel("Load Resistance (Ohm)")
-        ax1.set_ylabel("Vrms (V)")
-
-        ax2 = ax1.twinx()
-
-        ax2.plot(
-            current_df["Load Resistance (Ohm)"],
-            current_df["Irms (A)"],
-            marker="o",
-            label="Irms"
-        )
-
-        ax2.set_ylabel("Irms (A)")
-
-        plt.title("Impedance Matching: RMS Voltage and Current")
-        plt.tight_layout()
-
-        plt.savefig(
-            os.path.join(
-                folder_path,
-                "Impedance_RMS_Voltage_Current.png"
-            ),
-            dpi=300
-        )
-
-        plt.close()
+    plt.close()
 
     print(f"Saved impedance analysis:\n{output_excel}")
+    print(f"Saved combined plot:\n{combined_plot}")
+    print(f"Maximum RMS power at {max_power_label}: {max_power:.3e} W")
 
     return output_excel
-
-
-# def analyse_impedance_folder(folder_path):
-
-#     results = []
-
-#     csv_files = sorted([
-#         f for f in os.listdir(folder_path)
-#         if f.endswith(".csv")
-#         and "_analysis" not in f
-#         and "_analysed" not in f
-#         and "IMPEDANCE_ANALYSIS" not in f
-#     ])
-
-#     if len(csv_files) == 0:
-#         raise ValueError("No CSV files found.")
-
-#     def read_load_resistance(file_path):
-
-#         with open(file_path, "r") as f:
-#             for line in f:
-
-#                 if "# Load Resistance (Ohm)" in line:
-#                     parts = line.strip().split(",")
-
-#                     if len(parts) >= 2:
-#                         return float(parts[1])
-
-#                 if "time" in line.lower():
-#                     break
-
-#         return None
-
-#     def resistance_label(resistance):
-
-#         if resistance >= 1e9:
-#             return f"{resistance / 1e9:g}G"
-
-#         elif resistance >= 1e6:
-#             return f"{resistance / 1e6:g}M"
-
-#         elif resistance >= 1e3:
-#             return f"{resistance / 1e3:g}k"
-
-#         else:
-#             return f"{resistance:g}"
-
-#     for file in csv_files:
-
-#         file_path = os.path.join(folder_path, file)
-
-#         resistance = read_load_resistance(file_path)
-
-#         if resistance is None:
-#             print(f"Skipping {file}: no load resistance found.")
-#             continue
-
-#         df = load_data(file_path)
-
-#         if len(df) == 0:
-#             continue
-
-#         cycles = find_cycles(df)
-
-#         cycle_vrms = []
-#         cycle_vpeak = []
-
-#         for cycle_number, (start, end) in enumerate(cycles, start=1):
-
-#             cycle = df.loc[start:end]
-
-#             if len(cycle) < MIN_CYCLE_POINTS:
-#                 continue
-
-#             voltage = cycle["voltage"].values
-
-#             vrms = np.sqrt(
-#                 np.mean(voltage ** 2)
-#             )
-
-#             vpeak = np.max(
-#                 np.abs(voltage)
-#             )
-
-#             cycle_vrms.append(vrms)
-#             cycle_vpeak.append(vpeak)
-
-#         if len(cycle_vrms) == 0:
-#             print(f"Skipping {file}: no valid cycles found.")
-#             continue
-
-#         results.append({
-
-#             "File": file,
-
-#             "Load Resistance (Ohm)": resistance,
-
-#             "Load Resistance Label": resistance_label(resistance),
-
-#             "Cycles Analysed": len(cycle_vrms),
-
-#             "Mean Vrms (V)": np.mean(cycle_vrms),
-
-#             "STD Vrms (V)": np.std(cycle_vrms, ddof=1),
-
-#             "Mean Vpeak (V)": np.mean(cycle_vpeak),
-
-#             "STD Vpeak (V)": np.std(cycle_vpeak, ddof=1),
-#         })
-
-#     summary_df = pd.DataFrame(results)
-
-#     if len(summary_df) == 0:
-#         raise ValueError("No valid impedance data found.")
-
-#     summary_df = summary_df.sort_values(
-#         "Load Resistance (Ohm)"
-#     )
-
-#     output_excel = os.path.join(
-#         folder_path,
-#         "IMPEDANCE_ANALYSIS.xlsx"
-#     )
-
-#     with pd.ExcelWriter(
-#         output_excel,
-#         engine="openpyxl"
-#     ) as writer:
-
-#         summary_df.to_excel(
-#             writer,
-#             sheet_name="SUMMARY",
-#             index=False
-#         )
-
-#     plt.figure(figsize=(8, 5))
-
-#     plt.plot(
-#         summary_df["Load Resistance (Ohm)"],
-#         summary_df["Mean Vrms (V)"],
-#         marker="o",
-#         label="Mean Vrms"
-#     )
-
-#     plt.plot(
-#         summary_df["Load Resistance (Ohm)"],
-#         summary_df["Mean Vpeak (V)"],
-#         marker="o",
-#         label="Mean Vpeak"
-#     )
-
-#     plt.xscale("log")
-
-#     plt.xlabel("Load Resistance (Ohm)")
-#     plt.ylabel("Voltage (V)")
-#     plt.title("Impedance Matching")
-#     plt.legend()
-#     plt.tight_layout()
-
-#     plt.savefig(
-#         os.path.join(
-#             folder_path,
-#             "Impedance_Vrms_Vpeak.png"
-#         ),
-#         dpi=300
-#     )
-
-#     plt.close()
-
-#     print(f"Saved impedance analysis:\n{output_excel}")
-
-#     return output_excel
-
 
 '''
 Data processing functions
@@ -3191,51 +2746,79 @@ def read_target_force(file_path):
         return target_force
 
 def load_data(file_path):
+    """
+    Loads old or new CSV files.
 
-        data_start = 0
+    Expected old format:
+        time, force, voltage
 
-        with open(file_path, "r") as f:
+    Expected new dual format:
+        time, force, voltage, current
 
-            for i, line in enumerate(f):
+    The current column is assumed to be the amplified PCB current-output voltage.
+    It is converted into real current in amps.
+    """
 
-                line = line.strip()
+    data_start = 0
 
-                if not line:
-                    continue
+    with open(file_path, "r") as f:
+        for i, line in enumerate(f):
+            line = line.strip()
 
-                if line.startswith("#"):
-                    continue
+            if not line:
+                continue
 
-                if "time" in line.lower():
-                    continue
+            if line.startswith("#"):
+                continue
 
-                data_start = i
-                break
+            if "time" in line.lower():
+                continue
 
-        df = pd.read_csv(
-            file_path,
-            sep=r"[\s,\t]+",
-            engine="python",
-            skiprows=data_start,
-            header=None
-        )
+            data_start = i
+            break
 
+    df = pd.read_csv(
+        file_path,
+        sep=r"[\s,\t]+",
+        engine="python",
+        skiprows=data_start,
+        header=None
+    )
+
+    # Keep only expected columns
+    if df.shape[1] >= 4:
+        df = df.iloc[:, :4]
+        df.columns = ["time", "force", "voltage", "current_signal"]
+
+    elif df.shape[1] >= 3:
         df = df.iloc[:, :3]
         df.columns = ["time", "force", "voltage"]
 
-        df["time"] = pd.to_numeric(df["time"], errors="coerce")
-        df["force"] = pd.to_numeric(df["force"], errors="coerce")
-        df["voltage"] = pd.to_numeric(df["voltage"], errors="coerce")
+    elif df.shape[1] >= 2:
+        df = df.iloc[:, :2]
+        df.columns = ["time", "force"]
 
-        df = df.dropna()
+    else:
+        raise ValueError(f"Not enough columns in {file_path}")
 
-        # remove isolated first-row time glitch
-        if len(df) > 1 and df["time"].iloc[0] > df["time"].iloc[1]:
-            df = df.iloc[1:]
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        df = df.reset_index(drop=True)
+    df = df.dropna()
 
-        return df
+    # Remove isolated first-row time glitch
+    if len(df) > 1 and df["time"].iloc[0] > df["time"].iloc[1]:
+        df = df.iloc[1:]
+
+    df = df.reset_index(drop=True)
+
+    # Convert amplified current-output voltage to real current
+    if "current_signal" in df.columns:
+        df["current"] = amplified_voltage_to_current(
+            df["current_signal"]
+        )
+
+    return df
 
 def load_force_data(file_path):
 
@@ -3282,30 +2865,81 @@ def load_force_data(file_path):
 
         return df
 
-contact_start_threshold=0.5
-contact_end_threshold=0.2
 
-def find_cycles(df):
-        cycles = []
-        in_contact = False
-        start_index = None
+contact_start_threshold = 0.5
+contact_end_threshold = 0.2
 
-        for idx, force in zip(df.index, df["force"]):
 
-            if not in_contact and force >= contact_start_threshold:
-                in_contact = True
-                start_index = idx
+def find_cycles(
+    df,
+    force_col="force",
+    start_threshold=contact_start_threshold,
+    end_threshold=contact_end_threshold
+):
+    """
+    Detects contact cycles using hysteresis thresholds.
 
-            elif in_contact and force <= contact_end_threshold:
-                in_contact = False
-                end_index = idx
+    Contact begins when force rises above start_threshold.
+    Contact ends when force falls below end_threshold.
 
-                if start_index is not None:
-                    cycles.append((start_index, end_index))
+    Returns:
+        List of (start_index, end_index) tuples.
+    """
 
-                start_index = None
+    cycles = []
 
-        return cycles
+    in_contact = False
+    start_index = None
+
+    for idx, force in zip(df.index, df[force_col]):
+
+        if (
+            not in_contact
+            and force >= start_threshold
+        ):
+
+            in_contact = True
+            start_index = idx
+
+        elif (
+            in_contact
+            and force <= end_threshold
+        ):
+
+            in_contact = False
+            end_index = idx
+
+            if start_index is not None:
+                cycles.append(
+                    (start_index, end_index)
+                )
+
+            start_index = None
+
+    return cycles
+
+# def find_cycles(df):
+#         cycles = []
+#         in_contact = False
+#         start_index = None
+
+#         for idx, force in zip(df.index, df["force"]):
+
+#             if not in_contact and force >= contact_start_threshold:
+#                 in_contact = True
+#                 start_index = idx
+
+#             elif in_contact and force <= contact_end_threshold:
+#                 in_contact = False
+#                 end_index = idx
+
+#                 if start_index is not None:
+#                     cycles.append((start_index, end_index))
+
+#                 start_index = None
+
+#         return cycles
+
 
 def detect_mad_outliers(values, threshold=4.0):
 
@@ -3455,133 +3089,13 @@ def find_steady_force_region(
 
     return steady_region, steady_method, steady_start_time, steady_end_time
 
-def calculate_mean_cycle_spike(
-    df,
-    signal_col="voltage",
-    force_col="force",
-    force_threshold=0.5,
-    baseline_method="zero"
-):
-    """
-    Calculates mean rectified peak amplitude per cycle.
 
-    Workflow:
-    - Detect cycles from force
-    - Split data into cycles
-    - Baseline-correct each cycle
-    - Find positive and negative peaks
-    - Average them
-    - Return mean/std across cycles
+def baseline_correct_signal(signal, baseline_method="zero"):
+    """
+    Applies optional baseline correction to a signal.
     """
 
-    import numpy as np
-
-    df = df.dropna(subset=[force_col, signal_col]).copy()
-
-    # -------------------------------------------------
-    # Detect contact cycles
-    # -------------------------------------------------
-
-    df["contact"] = df[force_col] > force_threshold
-
-    df["cycle_start"] = (
-        df["contact"]
-        & ~df["contact"].shift(1).fillna(False)
-    )
-
-    cycle_starts = df.index[df["cycle_start"]].tolist()
-
-    cycle_peaks = []
-
-    # -------------------------------------------------
-    # Process each cycle
-    # -------------------------------------------------
-
-    for i in range(len(cycle_starts)):
-
-        start = cycle_starts[i]
-
-        end = (
-            cycle_starts[i + 1]
-            if i + 1 < len(cycle_starts)
-            else df.index[-1]
-        )
-
-        cycle = df.loc[start:end]
-
-        if len(cycle) < 5:
-            continue
-
-        signal = cycle[signal_col].to_numpy()
-
-        # ---------------------------------------------
-        # Baseline correction
-        # ---------------------------------------------
-
-        if baseline_method == "median":
-            baseline = np.median(signal)
-
-        elif baseline_method == "mean":
-            baseline = np.mean(signal)
-
-        elif baseline_method == "zero":
-            baseline = 0
-
-        else:
-            baseline = 0
-
-        corrected = signal - baseline
-
-        # ---------------------------------------------
-        # Positive + negative peaks
-        # ---------------------------------------------
-
-        positive_peak = np.max(corrected)
-
-        negative_peak = abs(np.min(corrected))
-
-        # Mean rectified peak
-        rectified_peak = (
-            positive_peak + negative_peak
-        ) / 2
-
-        cycle_peaks.append(rectified_peak)
-
-    # -------------------------------------------------
-    # Return stats
-    # -------------------------------------------------
-
-    if len(cycle_peaks) == 0:
-        return {
-            "mean_peak": np.nan,
-            "std_peak": np.nan,
-            "n_cycles": 0,
-            "cycle_peaks": []
-        }
-
-    return {
-        "mean_peak": np.mean(cycle_peaks),
-        "std_peak": np.std(cycle_peaks),
-        "n_cycles": len(cycle_peaks),
-        "cycle_peaks": cycle_peaks
-    }
-
-def calculate_rms(
-    df,
-    signal_col="voltage",
-    baseline_method="zero"
-):
-    """
-    Calculates whole-signal RMS.
-    """
-
-    import numpy as np
-
-    signal = df[signal_col].dropna().to_numpy()
-
-    # -------------------------------------------------
-    # Baseline correction
-    # -------------------------------------------------
+    signal = np.asarray(signal, dtype=float)
 
     if baseline_method == "median":
         baseline = np.median(signal)
@@ -3595,68 +3109,144 @@ def calculate_rms(
     else:
         baseline = 0
 
-    corrected = signal - baseline
+    return signal - baseline
 
-    # -------------------------------------------------
-    # RMS
-    # -------------------------------------------------
 
-    rms = np.sqrt(np.mean(corrected**2))
+def calculate_mean_cycle_spike(
+    df,
+    signal_col,
+    force_col="force",
+    force_threshold=FORCE_THRESHOLD,
+    baseline_method="zero"
+):
+    """
+    Calculates mean rectified peak amplitude per cycle.
 
-    return rms
+    For each force-detected cycle:
+    - baseline correct signal
+    - find positive peak
+    - find negative peak magnitude
+    - average positive and negative peak
+    - return mean/std across cycles
+    """
 
-def calculate_mean_voltage(df):
+    df = df.dropna(subset=[force_col, signal_col]).copy()
 
-    return calculate_mean_cycle_spike(
+    df["contact"] = df[force_col] > force_threshold
+
+    df["cycle_start"] = (
+        df["contact"]
+        &
+        ~df["contact"].shift(1).fillna(False)
+    )
+
+    cycle_starts = df.index[df["cycle_start"]].tolist()
+
+    cycle_peaks = []
+
+    for i in range(len(cycle_starts)):
+
+        start = cycle_starts[i]
+
+        end = (
+            cycle_starts[i + 1]
+            if i + 1 < len(cycle_starts)
+            else df.index[-1]
+        )
+
+        cycle = df.loc[start:end]
+
+        if len(cycle) < MIN_CYCLE_POINTS:
+            continue
+
+        signal = cycle[signal_col].to_numpy()
+
+        corrected = baseline_correct_signal(
+            signal,
+            baseline_method=baseline_method
+        )
+
+        positive_peak = np.max(corrected)
+        negative_peak = abs(np.min(corrected))
+
+        rectified_peak = (
+            positive_peak + negative_peak
+        ) / 2
+
+        cycle_peaks.append(rectified_peak)
+
+    if len(cycle_peaks) == 0:
+        return {
+            "mean_peak": np.nan,
+            "std_peak": np.nan,
+            "n_cycles": 0,
+            "cycle_peaks": []
+        }
+
+    return {
+        "mean_peak": np.mean(cycle_peaks),
+        "std_peak": np.std(cycle_peaks, ddof=1) if len(cycle_peaks) > 1 else np.nan,
+        "n_cycles": len(cycle_peaks),
+        "cycle_peaks": cycle_peaks
+    }
+
+
+def calculate_rms(
+    df,
+    signal_col,
+    baseline_method="zero"
+):
+    """
+    Calculates whole-file RMS for a selected signal column.
+    """
+
+    signal = df[signal_col].dropna().to_numpy()
+
+    corrected = baseline_correct_signal(
+        signal,
+        baseline_method=baseline_method
+    )
+
+    return np.sqrt(np.mean(corrected ** 2))
+
+
+def calculate_signal_metrics(
+    df,
+    signal_col,
+    baseline_method="zero"
+):
+    """
+    Returns both cycle peak stats and whole-file RMS for one signal.
+    """
+
+    peak_stats = calculate_mean_cycle_spike(
         df,
-        signal_col="voltage",
+        signal_col=signal_col,
         force_col="force",
         force_threshold=FORCE_THRESHOLD,
+        baseline_method=baseline_method
+    )
+
+    rms_value = calculate_rms(
+        df,
+        signal_col=signal_col,
+        baseline_method=baseline_method
+    )
+
+    return peak_stats, rms_value
+
+def calculate_voltage_metrics(df):
+    return calculate_signal_metrics(
+        df,
+        signal_col="voltage",
         baseline_method="zero"
     )
 
 
-def calculate_rms_voltage(df):
-
-    return calculate_rms(
+def calculate_current_metrics(df):
+    return calculate_signal_metrics(
         df,
-        signal_col="voltage",
-        baseline_method="zero"
-    )
-
-
-def calculate_current_metrics(amplified_voltage_signal):
-
-    INA_GAIN = 989
-    SHUNT_RESISTOR = 1e6
-
-    # Convert amplified PCB output back to real current
-    real_current = amplified_voltage_signal / (INA_GAIN * SHUNT_RESISTOR)
-
-    mean_current = np.mean(real_current)
-
-    rms_current = np.sqrt(np.mean(real_current**2))
-
-    peak_current = np.max(np.abs(real_current))
-
-    return mean_current, rms_current, peak_current
-
-def calculate_mean_current(df):
-
-    return calculate_mean_cycle_spike(
-        df,
-        signal_col="voltage",
-        force_col="force",
-        force_threshold=FORCE_THRESHOLD,
-        baseline_method="median"
-    )
-
-
-def calculate_rms_current(df):
-
-    return calculate_rms(
-        df,
-        signal_col="voltage",
+        signal_col="current",
         baseline_method="median"
     )
 
