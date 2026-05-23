@@ -97,16 +97,19 @@ fast_speed = 6000
 
 cycle_start_time = 0
 
+last_command_sent = ""
 latest_force = None
 latest_voltage = None
-last_command_sent = ""
+latest_current_output_voltage = None
+latest_current_A = None
+latest_current_nA = None
 
 csv_writer = None
 current_log_file = None
 csv_lock = threading.Lock()
 
 load_resistance = 1e6   # Ohms (example default)
-measurement_mode = "VOLTAGE"   # or "CURRENT"
+measurement_mode = "VOLTAGE"   # or "CURRENT" or "DUAL"
 counter_material = "UNKNOWN"
 z_cal_test = "DEFAULT"  # Test name/material for z calibration
 
@@ -115,70 +118,148 @@ z_cal_test = "DEFAULT"  # Test name/material for z calibration
 
 loadcell = None
 printer = None
-keithly = None
 
-import pyvisa
-import threading
-import time
+VOLTAGE_KEITHLEY_RESOURCE = "USB0::0x05E6::0x6500::04594233::INSTR"
+CURRENT_KEITHLEY_RESOURCE = "USB0::0x05E6::0x6500::04677592::INSTR"
 
 rm = None
-keithley = None
+keithley_voltage = None
+keithley_current = None
 
-def init_keithley(resource_string=None):
-    global rm, keithley
+
+def setup_keithley(inst, label):
+    inst.timeout = 5000
+    inst.read_termination = "\n"
+    inst.write_termination = "\n"
+
+    print(f"{label}:", inst.query("*IDN?"))
+
+    inst.write("reset()")
+    inst.write("dmm.measure.func = dmm.FUNC_DC_VOLTAGE")
+    inst.write("dmm.measure.autorange = dmm.ON")
+
+
+def init_keithleys():
+    global rm, keithley_voltage, keithley_current
 
     rm = pyvisa.ResourceManager()
 
-    resources = rm.list_resources()
-    print("Available VISA resources:", resources)
+    keithley_voltage = rm.open_resource(VOLTAGE_KEITHLEY_RESOURCE)
+    setup_keithley(keithley_voltage, "Voltage Keithley")
 
-    if not resources:
-        raise RuntimeError("No VISA instruments found")
+    keithley_current = rm.open_resource(CURRENT_KEITHLEY_RESOURCE)
+    setup_keithley(keithley_current, "Current Keithley")
 
-    # PICK ONLY INSTRUMENTS (filter out noise)
-    candidates = [r for r in resources if "GPIB" in r or "USB" in r or "ASRL" in r]
+CURRENT_SHUNT_OHM = 1_000
+INA_GAIN = 1 + (49_400 / 50)   # ≈ 989 for 50 ohm RG
 
-    if not candidates:
-        raise RuntimeError("No valid Keithley resource found")
 
-    if resource_string is None:
-        resource_string = candidates[0].strip()
-
-    print("Opening:", repr(resource_string))
-
-    keithley = rm.open_resource(resource_string)
-
-    keithley.timeout = 5000
-    keithley.read_termination = "\n"
-    keithley.write_termination = "\n"
-
-    print(keithley.query("*IDN?"))
-
+def cleanup_keithleys():
+    """Safely close both Keithley instruments before exiting."""
+    global keithley_voltage, keithley_current, rm
     
-    keithley.write("reset()")
-    # keithley.write("clear()")
-
-    # IMPORTANT: explicitly enable DC voltage mode
-    keithley.write("dmm.measure.func = dmm.FUNC_DC_VOLTAGE")
-    keithley.write("dmm.measure.autorange = dmm.ON")
-
+    try:
+        if keithley_voltage is not None:
+            keithley_voltage.close()
+            print("✓ Voltage Keithley closed")
+            keithley_voltage = None
+    except Exception as e:
+        print(f"Error closing voltage Keithley: {e}")
+    
+    try:
+        if keithley_current is not None:
+            keithley_current.close()
+            print("✓ Current Keithley closed")
+            keithley_current = None
+    except Exception as e:
+        print(f"Error closing current Keithley: {e}")
+    
+    try:
+        if rm is not None:
+            rm.close()
+            rm = None
+    except Exception as e:
+        print(f"Error closing VISA resource manager: {e}")
 
 
 def read_voltage():
+    if keithley_voltage is None:
+        return None
     try:
-        return float(keithley.query("print(dmm.measure.read())"))
+        return float(keithley_voltage.query("print(dmm.measure.read())"))
     except Exception as e:
-        print("Keithley read error:", e)
+        print("Voltage Keithley read error:", e)
         return None
 
+
+def read_current_output_voltage():
+    if keithley_current is None:
+        return None
+    try:
+        return float(keithley_current.query("print(dmm.measure.read())"))
+    except Exception as e:
+        print("Current Keithley read error:", e)
+        return None
+
+
+def current_output_voltage_to_current_A(v):
+    if v is None:
+        return None
+    return v / (CURRENT_SHUNT_OHM * INA_GAIN)
+
+# def init_keithley(resource_string=None):
+#     global rm, keithley
+
+#     rm = pyvisa.ResourceManager()
+
+#     resources = rm.list_resources()
+#     print("Available VISA resources:", resources)
+
+#     if not resources:
+#         raise RuntimeError("No VISA instruments found")
+
+#     # PICK ONLY INSTRUMENTS (filter out noise)
+#     candidates = [r for r in resources if "GPIB" in r or "USB" in r or "ASRL" in r]
+
+#     if not candidates:
+#         raise RuntimeError("No valid Keithley resource found")
+
+#     if resource_string is None:
+#         resource_string = candidates[0].strip()
+
+#     print("Opening:", repr(resource_string))
+
+#     keithley = rm.open_resource(resource_string)
+
+#     keithley.timeout = 5000
+#     keithley.read_termination = "\n"
+#     keithley.write_termination = "\n"
+
+#     print(keithley.query("*IDN?"))
+
+    
+#     keithley.write("reset()")
+#     # keithley.write("clear()")
+
+#     # IMPORTANT: explicitly enable DC voltage mode
+#     keithley.write("dmm.measure.func = dmm.FUNC_DC_VOLTAGE")
+#     keithley.write("dmm.measure.autorange = dmm.ON")
+
+# def read_voltage():
+#     try:
+#         return float(keithley.query("print(dmm.measure.read())"))
+#     except Exception as e:
+#         print("Keithley read error:", e)
+#         return None
+
 def initialise_rig():
-    global loadcell, printer, keithly
+    global loadcell, printer
 
     print("Connecting hardware...")
 
     loadcell = serial.Serial(arduino_port, 9600, timeout=2)
     printer = serial.Serial(printer_port, 115200, timeout=5)  
-    init_keithley() 
+    init_keithleys()
     # keithly = pyvisa.ResourceManager().open_resource(keithly_port)
 
     time.sleep(3)
@@ -416,16 +497,16 @@ def sliding_cycle():
 # Logging Control
 # -----------------------------------------------------------------------------
 
-def start_test(test_name, material, counter_material, load_resistance, measurement_mode, contact_force, extra_folder=None):
+def start_test(test_name, material, counter_material, load_resistance, selected_measurement_mode, contact_force, extra_folder=None):
     """
     Start a new test session and create a CSV log file.
     Creates a subfolder for the material.
     Only one test can run at a time.
     """
-
-    # Sets up the data collection
-
-    global current_log_file, csv_writer, SAVE_DIR
+    
+    global current_log_file, csv_writer, SAVE_DIR, measurement_mode
+    
+    measurement_mode = selected_measurement_mode.upper()
     with csv_lock:
         if current_log_file is not None:
             print("⚠ A test is already running! Stop it first.")
@@ -490,8 +571,13 @@ def start_test(test_name, material, counter_material, load_resistance, measureme
         csv_writer.writerow([])  # blank line
 
 
-        
-        csv_writer.writerow(["time_s", "force_N", "voltage_V"])
+        csv_writer.writerow([
+            "time_s",
+            "force_N",
+            "voltage_V",
+            "current_A",
+            # "current_nA"
+        ])
 
         global acquisition_running, start_time
         start_time = time.monotonic()
@@ -535,31 +621,31 @@ def stop_test():
             print("🛑 Test logging stopped.")
         current_log_file = None
         csv_writer = None
-    
+
 
 # -----------------------------------------------------------------------------
 # Full Test Protocol
 # -----------------------------------------------------------------------------
 
-def run_test_protocol(material):
-    ''' runs whole protocol for both'''
-    setup() # calibrates x, y, z coords and moves to "home"
-    send_gcode("M400") # waits for printer to finish moving
-    calibrate_z() # determines z coords for neutral, contact and separation
-    send_gcode("M400") # waits for printer to finish moving
+# def run_test_protocol(material):
+#     ''' runs whole protocol for both'''
+#     setup() # calibrates x, y, z coords and moves to "home"
+#     send_gcode("M400") # waits for printer to finish moving
+#     calibrate_z() # determines z coords for neutral, contact and separation
+#     send_gcode("M400") # waits for printer to finish moving
 
-    for i in range(number_of_contact_tests):
-        start_test('contact', material)
-        z_go_to(85)
-        send_gcode("M400") # waits for printer to finish moving
+#     for i in range(number_of_contact_tests):
+#         start_test('contact', material)
+#         z_go_to(85)
+#         send_gcode("M400") # waits for printer to finish moving
     
-    for i in range(number_of_slide_tests):
-        start_test('slide', material)
-        z_go_to(85)
-        send_gcode("M400") # waits for printer to finish moving
+#     for i in range(number_of_slide_tests):
+#         start_test('slide', material)
+#         z_go_to(85)
+#         send_gcode("M400") # waits for printer to finish moving
     
-    reset()
-    send_gcode("M400") # waits for printer to finish moving
+#     reset()
+#     send_gcode("M400") # waits for printer to finish moving
 
 def run_contact_full_force_range(material, counter_material, load_resistance, measurement_mode):
     ''' runs tests for full range of forces in the contact mode'''
@@ -661,28 +747,135 @@ def arduino_loop():
 acquisition_running = False
 start_time = None
 
-
 def acquisition_loop():
-    global latest_force, latest_voltage, csv_writer, start_time
+    global latest_force
+    global latest_voltage
+    global latest_current_A
+    global latest_current_nA
+    global csv_writer, start_time
+    global measurement_mode
 
     dt = 0.05
-    start_time = time.monotonic()  # Initialize time at loop start
+    start_time = time.monotonic()
 
     while True:
+
         t = time.monotonic() - start_time
         force = latest_force
 
-        try:
-            voltage = read_voltage()
-            latest_voltage = voltage
-        except:
-            voltage = None
+        voltage = None
+        current_A = None
+        current_nA = None
 
+        # -----------------------------
+        # VOLTAGE MODE
+        # -----------------------------
+        if measurement_mode in ["VOLTAGE", "DUAL"]:
+            voltage = read_voltage()
+
+        # -----------------------------
+        # CURRENT MODE
+        # -----------------------------
+        if measurement_mode in ["CURRENT", "DUAL"]:
+
+            current_output_voltage = read_current_output_voltage()
+
+            if current_output_voltage is not None:
+
+                current_A = current_output_voltage / (
+                    CURRENT_SHUNT_OHM * INA_GAIN
+                )
+
+                current_nA = current_A * 1e9
+
+        latest_voltage = voltage
+        latest_current_A = current_A
+        latest_current_nA = current_nA
+
+        # -----------------------------
+        # Logging
+        # -----------------------------
         with csv_lock:
+
             if current_log_file is not None:
-                csv_writer.writerow([t, force, voltage])
+
+                csv_writer.writerow([
+                    t,
+                    force,
+                    voltage,
+                    current_A,
+                    # current_nA
+                ])
 
         time.sleep(dt)
+
+# def acquisition_loop():
+#     global latest_force
+#     global latest_voltage
+#     global latest_current_A
+#     # global latest_current_nA
+#     global csv_writer, start_time
+
+#     dt = 0.05
+#     start_time = time.monotonic()
+
+#     while True:
+
+#         t = time.monotonic() - start_time
+#         force = latest_force
+
+#         voltage = read_voltage()
+
+#         current_output_voltage = read_current_output_voltage()
+
+#         if current_output_voltage is not None:
+#             current_A = current_output_voltage / (
+#                 CURRENT_SHUNT_OHM * INA_GAIN
+#             )
+
+#             # current_nA = current_A * 1e9
+
+#         else:
+#             current_A = None
+#             # current_nA = None
+
+#         latest_voltage = voltage
+#         latest_current_A = current_A
+#         # latest_current_nA = current_nA
+
+#         with csv_lock:
+#             if current_log_file is not None:
+#                 csv_writer.writerow([
+#                     t,
+#                     force,
+#                     voltage,
+#                     current_A,
+#                     # current_nA
+#                 ])
+
+#         time.sleep(dt)
+
+# def acquisition_loop():
+#     global latest_force, latest_voltage, csv_writer, start_time
+
+#     dt = 0.05
+#     start_time = time.monotonic()  # Initialize time at loop start
+
+#     while True:
+#         t = time.monotonic() - start_time
+#         force = latest_force
+
+#         try:
+#             voltage = read_voltage()
+#             latest_voltage = voltage
+#         except:
+#             voltage = None
+
+#         with csv_lock:
+#             if current_log_file is not None:
+#                 csv_writer.writerow([t, force, voltage])
+
+#         time.sleep(dt)
 
 
 

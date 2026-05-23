@@ -98,16 +98,27 @@ graph_frame = tk.LabelFrame(right_frame, text="Live Force (N)")
 graph_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
 
-fig, ax1 = plt.subplots(figsize=(8, 4), dpi=100)
+fig, (ax_force, ax_voltage, ax_current) = plt.subplots(
+    3, 1,
+    figsize=(8, 6),
+    dpi=100,
+    sharex=True
+)
+
 fig.tight_layout()
 
-ax2 = ax1.twinx()  # second y-axis
+# fig, ax1 = plt.subplots(figsize=(8, 4), dpi=100)
+# fig.tight_layout()
+
+# ax2 = ax1.twinx()  # second y-axis
 
 canvas = FigureCanvasTkAgg(fig, master=graph_frame)
 canvas.get_tk_widget().pack(fill="both", expand=True)
 
 force_history = deque(maxlen=500)
 voltage_history = deque(maxlen=500)
+current_history = deque(maxlen=500)
+
 
 
 start_time = time.monotonic()
@@ -124,6 +135,13 @@ def update_graph():
         # -----------------------------
         f = Testing_functions.latest_force
         v = Testing_functions.latest_voltage
+        # i_nA = Testing_functions.latest_current_A
+
+        i_A = Testing_functions.latest_current_A
+        if i_A is not None:
+            i_nA = i_A * 1e9
+        else:
+            i_nA = None
 
         t = time.monotonic() - start_time
 
@@ -138,6 +156,9 @@ def update_graph():
         if v is not None:
             voltage_history.append((t, v))
 
+        if i_nA is not None:
+            current_history.append((t, i_nA))
+
         # -----------------------------
         # Keep only last 60 seconds
         # -----------------------------
@@ -147,11 +168,32 @@ def update_graph():
         while voltage_history and (t - voltage_history[0][0]) > WINDOW:
             voltage_history.popleft()
 
+        while current_history and (t - current_history[0][0]) > WINDOW:
+            current_history.popleft()
+
         # Need enough data
         if len(force_history) < 2:
             root.after(100, update_graph)
             return
 
+        # if len(voltage_history) > 0:
+        #     t_v, v_vals = zip(*voltage_history)
+        # else:
+        #     t_v, v_vals = [], []
+
+        # if len(current_history) > 0:
+        #     t_i, i_vals = zip(*current_history)
+        # else:
+        #     t_i, i_vals = [], []
+
+
+        ax_force.cla()
+        ax_voltage.cla()
+        ax_current.cla()
+
+        # -----------------------------
+        # Prepare data
+        # -----------------------------
         t_f, f_vals = zip(*force_history)
 
         if len(voltage_history) > 0:
@@ -159,86 +201,146 @@ def update_graph():
         else:
             t_v, v_vals = [], []
 
-        # -----------------------------
-        # Clear plots
-        # -----------------------------
-        ax1.cla()
-        ax2.cla()
-
-        # -----------------------------
-        # FORCE plot (left axis)
-        # -----------------------------
-        ax1.plot(t_f, f_vals, color="tab:red")
-        ax1.set_ylabel("Force (N)", color="tab:red")
-        ax1.tick_params(axis='y', labelcolor="tab:red")
-
-        # -----------------------------
-        # VOLTAGE plot (right axis)
-        # -----------------------------
-        ax2.plot(t_v, v_vals, color="tab:blue")
-        ax2.set_ylabel("Voltage (V)", color="tab:blue")
-        ax2.tick_params(axis='y', labelcolor="tab:blue")
-        ax2.yaxis.set_label_position("right")
-        ax2.yaxis.tick_right()
-
-        # -----------------------------
-        # X axis (scrolling 60s window)
-        # -----------------------------
-        ax1.set_xlim(max(0, t - WINDOW), t)
-        ax1.set_xlabel("Time (s)", labelpad=8)
-        ax1.tick_params(axis='x', rotation=25)
-
-        # -----------------------------
-        # FORCE Y axis (with padding to prevent clipping)
-        # -----------------------------
-        f_min_base, f_max_base = -1, 11
-        f_data_min = min(f_vals)
-        f_data_max = max(f_vals)
-
-        f_range = max(1e-6, f_data_max - f_data_min)
-        f_pad = max(0.5, 0.05 * f_range)
-
-        ax1.set_ylim(
-            min(f_min_base, f_data_min - f_pad),
-            max(f_max_base, f_data_max + f_pad)
-        )
-
-        # Set ticks every 1N on force axis
-        y_min, y_max = ax1.get_ylim()
-        ax1.set_yticks(range(int(y_min), int(y_max) + 1))
-
-        # -----------------------------
-        # VOLTAGE Y axis (with padding)
-        # -----------------------------
-        v_min_base, v_max_base = -5, 5
-
-        if len(v_vals) > 0:
-            v_data_min = min(v_vals)
-            v_data_max = max(v_vals)
-
-            v_range = max(1e-6, v_data_max - v_data_min)
-            v_pad = max(0.1, 0.05 * v_range)
-
-            ax2.set_ylim(
-                min(v_min_base, v_data_min - v_pad),
-                max(v_max_base, v_data_max + v_pad)
-            )
+        if len(current_history) > 0:
+            t_i, i_vals = zip(*current_history)
         else:
-            ax2.set_ylim(v_min_base, v_max_base)
+            t_i, i_vals = [], []
 
         # -----------------------------
-        # Grid styling
+        # FORCE
         # -----------------------------
-        ax1.grid(True, which="both", axis="both",
-                 linestyle="--", linewidth=0.5, alpha=0.7)
+        ax_force.plot(t_f, f_vals, color="tab:red")
+        ax_force.set_ylabel("Force (N)", color="tab:red")
+        ax_force.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+        ax_force.tick_params(axis='y', labelcolor="tab:red")
+        # -----------------------------
+        # VOLTAGE
+        # -----------------------------
+        ax_voltage.plot(t_v, v_vals, color="tab:blue")
+        ax_voltage.set_ylabel("Voltage (V)", color="tab:blue")
+        ax_voltage.tick_params(axis='y', labelcolor="tab:blue")
+        ax_voltage.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
         # -----------------------------
-        # Layout cleanup
+        # CURRENT
         # -----------------------------
+        ax_current.plot(t_i, i_vals, color="tab:green")
+        ax_current.set_ylabel("Current (nA)", color="tab:green")
+        ax_current.set_xlabel("Time (s)")
+        ax_current.tick_params(axis='y', labelcolor="tab:green")
+        ax_current.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+        # -----------------------------
+        # X axis
+        # -----------------------------
+        for ax in (ax_force, ax_voltage, ax_current):
+            ax.set_xlim(max(0, t - WINDOW), t)
+
+        # -----------------------------
+        # Y axis padding helper
+        # -----------------------------
+        def set_padded_ylim(ax, values, default_min, default_max, min_pad):
+            if len(values) == 0:
+                ax.set_ylim(default_min, default_max)
+                return
+
+            data_min = min(values)
+            data_max = max(values)
+            data_range = max(1e-6, data_max - data_min)
+            pad = max(min_pad, 0.05 * data_range)
+
+            ax.set_ylim(
+                min(default_min, data_min - pad),
+                max(default_max, data_max + pad)
+            )
+
+        set_padded_ylim(ax_force, f_vals, -1, 11, 0.5)
+        set_padded_ylim(ax_voltage, v_vals, -5, 5, 0.1)
+        set_padded_ylim(ax_current, i_vals, -10, 10, 0.5)
+
         fig.tight_layout()
-        fig.subplots_adjust(right=0.88)
-
         canvas.draw_idle()
+
+        # # -----------------------------
+        # # Clear plots
+        # # -----------------------------
+        # ax1.cla()
+        # ax2.cla()
+
+        # # -----------------------------
+        # # FORCE plot (left axis)
+        # # -----------------------------
+        # ax1.plot(t_f, f_vals, color="tab:red")
+        # ax1.set_ylabel("Force (N)", color="tab:red")
+        # ax1.tick_params(axis='y', labelcolor="tab:red")
+
+        # # -----------------------------
+        # # VOLTAGE plot (right axis)
+        # # -----------------------------
+        # ax2.plot(t_v, v_vals, color="tab:blue")
+        # ax2.set_ylabel("Voltage (V)", color="tab:blue")
+        # ax2.tick_params(axis='y', labelcolor="tab:blue")
+        # ax2.yaxis.set_label_position("right")
+        # ax2.yaxis.tick_right()
+
+        # # -----------------------------
+        # # X axis (scrolling 60s window)
+        # # -----------------------------
+        # ax1.set_xlim(max(0, t - WINDOW), t)
+        # ax1.set_xlabel("Time (s)", labelpad=8)
+        # ax1.tick_params(axis='x', rotation=25)
+
+        # # -----------------------------
+        # # FORCE Y axis (with padding to prevent clipping)
+        # # -----------------------------
+        # f_min_base, f_max_base = -1, 11
+        # f_data_min = min(f_vals)
+        # f_data_max = max(f_vals)
+
+        # f_range = max(1e-6, f_data_max - f_data_min)
+        # f_pad = max(0.5, 0.05 * f_range)
+
+        # ax1.set_ylim(
+        #     min(f_min_base, f_data_min - f_pad),
+        #     max(f_max_base, f_data_max + f_pad)
+        # )
+
+        # # Set ticks every 1N on force axis
+        # y_min, y_max = ax1.get_ylim()
+        # ax1.set_yticks(range(int(y_min), int(y_max) + 1))
+
+        # # -----------------------------
+        # # VOLTAGE Y axis (with padding)
+        # # -----------------------------
+        # v_min_base, v_max_base = -5, 5
+
+        # if len(v_vals) > 0:
+        #     v_data_min = min(v_vals)
+        #     v_data_max = max(v_vals)
+
+        #     v_range = max(1e-6, v_data_max - v_data_min)
+        #     v_pad = max(0.1, 0.05 * v_range)
+
+        #     ax2.set_ylim(
+        #         min(v_min_base, v_data_min - v_pad),
+        #         max(v_max_base, v_data_max + v_pad)
+        #     )
+        # else:
+        #     ax2.set_ylim(v_min_base, v_max_base)
+
+        # # -----------------------------
+        # # Grid styling
+        # # -----------------------------
+        # ax1.grid(True, which="both", axis="both",
+        #          linestyle="--", linewidth=0.5, alpha=0.7)
+
+        # # -----------------------------
+        # # Layout cleanup
+        # # -----------------------------
+        # fig.tight_layout()
+        # fig.subplots_adjust(right=0.88)
+
+        # canvas.draw_idle()
 
     except Exception as e:
         print("Graph error:", e)
@@ -388,9 +490,11 @@ def run(cmd):
     threading.Thread(target=worker, daemon=True).start()
 
 def safe_stop():
-    """Button callback - forcefully exits"""
-    print("SAFE STOP pressed - killing process!")
+    """Button callback - gracefully exits after cleanup"""
+    print("SAFE STOP pressed - cleaning up and exiting!")
     sys.stdout.flush()
+    Testing_functions.stop_test()  # Close log file
+    Testing_functions.cleanup_keithleys()  # Close instruments
     os._exit(1)
 
 # =====================================================
@@ -515,7 +619,7 @@ def prompt_and_start_test(test_type):
 
     # Measurement mode dropdown
     tk.Label(frame, text="Measurement Mode").pack(anchor="w")
-    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT").pack(fill="x", pady=5)
+    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT", "DUAL").pack(fill="x", pady=5)
 
     # -----------------------------
     # HELPER: convert resistance to Ohms
@@ -609,7 +713,7 @@ def prompt_and_start_full_force_range():
 
     # Measurement mode dropdown
     tk.Label(frame, text="Measurement Mode").pack(anchor="w")
-    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT").pack(fill="x", pady=5)
+    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT", "DUAL").pack(fill="x", pady=5)
 
     # -----------------------------
     # HELPER: convert resistance to Ohms
@@ -681,7 +785,7 @@ def prompt_and_start_impedance_test():
     tk.Entry(frame, textvariable=counter_var).pack(fill="x", pady=5)
 
     tk.Label(frame, text="Measurement Mode").pack(anchor="w")
-    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT").pack(fill="x", pady=5)
+    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT", "DUAL").pack(fill="x", pady=5)
 
     def start():
         material = material_var.get().strip()
