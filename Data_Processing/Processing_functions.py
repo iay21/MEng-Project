@@ -3625,6 +3625,22 @@ def calculate_rms_voltage(df):
     )
 
 
+def calculate_current_metrics(amplified_voltage_signal):
+
+    INA_GAIN = 989
+    SHUNT_RESISTOR = 1e6
+
+    # Convert amplified PCB output back to real current
+    real_current = amplified_voltage_signal / (INA_GAIN * SHUNT_RESISTOR)
+
+    mean_current = np.mean(real_current)
+
+    rms_current = np.sqrt(np.mean(real_current**2))
+
+    peak_current = np.max(np.abs(real_current))
+
+    return mean_current, rms_current, peak_current
+
 def calculate_mean_current(df):
 
     return calculate_mean_cycle_spike(
