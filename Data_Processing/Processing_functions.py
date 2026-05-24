@@ -1,3 +1,4 @@
+from matplotlib.colors import LinearSegmentedColormap
 import pandas as pd
 import numpy as np
 import os
@@ -630,7 +631,8 @@ def full_frequency_force_analysis(master_folder):
 
         forces = metric_df[metric_col]
 
-        for freq in frequency_folders:
+
+        for i, freq in enumerate(frequency_folders):
 
             if freq in metric_df.columns:
 
@@ -638,6 +640,7 @@ def full_frequency_force_analysis(master_folder):
                     forces,
                     metric_df[freq],
                     marker="o",
+                    color=get_default_colour(i),
                     label=freq
                 )
 
@@ -709,10 +712,12 @@ def full_frequency_force_analysis(master_folder):
     heatmap_df = force_rms_df.set_index("RMS")
     heatmap_df = heatmap_df[frequency_folders]
 
+
     plt.figure(figsize=(8, 6))
 
     plt.imshow(
         heatmap_df.values,
+        cmap=custom_cmap,
         aspect="auto"
     )
 
@@ -1409,7 +1414,10 @@ def compare_force_control_methods_simple(master_folder):
     def plot_comparison(y_col, ylabel, title, filename, zero_line=False):
         plt.figure(figsize=(8, 6))
 
-        for method in sorted(combined_df["Method"].unique()):
+        for i, method in enumerate(
+            sorted(combined_df["Method"].unique())
+        ):
+
             subset = combined_df[
                 combined_df["Method"] == method
             ].sort_values("Target Force (N)")
@@ -1418,8 +1426,21 @@ def compare_force_control_methods_simple(master_folder):
                 subset["Target Force (N)"],
                 subset[y_col],
                 marker="o",
+                color=get_plot_colour(i),
                 label=method
             )
+
+        # for method in sorted(combined_df["Method"].unique()):
+        #     subset = combined_df[
+        #         combined_df["Method"] == method
+        #     ].sort_values("Target Force (N)")
+
+        #     plt.plot(
+        #         subset["Target Force (N)"],
+        #         subset[y_col],
+        #         marker="o",
+        #         label=method
+        #     )
 
         if zero_line:
             plt.axhline(0, linestyle="--")
@@ -3784,3 +3805,116 @@ def calculate_cycle_instantaneous_power_metrics(df):
         "n_cycles": len(cycle_max_abs_powers),
         "cycle_max_abs_powers": cycle_max_abs_powers
     }
+
+
+'''
+Formatting plots for consistancy
+'''
+
+PLOT_COLOURS = {
+    "force": "#FF4F61",
+    "voltage": "#8EBCF8",
+    "current": "#87CB52",
+    "power": "#FFC618",
+    "rms_power": "tab:purple",
+    "target": "black",
+    "steady": "tab:cyan",
+    "error": "tab:pink"
+}
+
+DEFAULT_COLOURS = [
+    "#FF4F61",
+    "#FFC618",
+    "#87CB52",
+    "#7CC6CF",
+    "#008080",
+    "#526CA1",
+]
+
+def get_default_colour(index):
+    """
+    Returns a colour from the default colour cycle.
+    Loops around if there are more plotted lines than colours.
+    """
+    return DEFAULT_COLOURS[
+        index % len(DEFAULT_COLOURS)
+    ]
+
+PLOT_COLOUR_CYCLE = [
+    "#797979",
+    "#FF4F61",
+    "#F17C64",
+    "#FFC618",
+    "#CFAE4A",
+    "#87CB52",
+    "#479079",
+    "#7CC6CF",
+    "#008080",
+    "#8EBCF8",
+    "#526CA1"
+]
+
+
+def get_plot_colour(index):
+    """
+    Returns a colour from the custom colour cycle.
+    Loops around if there are more plotted lines than colours.
+    """
+    return PLOT_COLOUR_CYCLE[
+        index % len(PLOT_COLOUR_CYCLE)
+    ]
+
+
+cmap_colors = [
+    "#87CB52",
+    "#FFC618",
+    "#F17C64",
+    "#FF4F61",
+]
+
+custom_cmap = LinearSegmentedColormap.from_list(
+    "custom_cmap",
+    cmap_colors,
+)
+
+def set_plot_formatting(
+    ax,
+    title=None,
+    xlabel=None,
+    ylabel=None,
+    grid=True,
+    legend=True,
+    xscale=None,
+    yscale=None
+):
+    """
+    Applies consistent formatting to a matplotlib axis.
+    """
+
+    if title is not None:
+        ax.set_title(title)
+
+    if xlabel is not None:
+        ax.set_xlabel(xlabel)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
+
+    if xscale is not None:
+        ax.set_xscale(xscale)
+
+    if yscale is not None:
+        ax.set_yscale(yscale)
+
+    if grid:
+        ax.grid(
+            True,
+            which="both",
+            linestyle="--",
+            alpha=0.35
+        )
+
+    if legend:
+        ax.legend(loc="best")
+
+    return ax
