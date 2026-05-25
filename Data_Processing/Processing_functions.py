@@ -2217,10 +2217,6 @@ def analyse_impedance_folder(folder_path):
     if len(csv_files) == 0:
         raise ValueError("No CSV files found.")
 
-    # =====================================================
-    # RESISTANCE LABELS
-    # =====================================================
-
     def resistance_label(resistance):
 
         if resistance >= 1e9:
@@ -2235,17 +2231,19 @@ def analyse_impedance_folder(folder_path):
         else:
             return f"{resistance:g}"
 
-    # =====================================================
-    # CYCLE INSTANTANEOUS POWER
-    # =====================================================
-
     def calculate_cycle_power_metrics(df):
+
+        if "voltage" not in df.columns or "current" not in df.columns:
+            return {
+                "mean_cycle_max_abs_power": np.nan,
+                "std_cycle_max_abs_power": np.nan,
+                "overall_max_abs_power": np.nan,
+                "n_cycles": 0
+            }
 
         df = df.copy()
 
-        df["instantaneous_power"] = (
-            df["voltage"] * df["current"]
-        )
+        df["instantaneous_power"] = df["voltage"] * df["current"]
 
         cycles = find_cycles(df)
 
@@ -2274,39 +2272,19 @@ def analyse_impedance_folder(folder_path):
             }
 
         return {
-
-            "mean_cycle_max_abs_power": np.mean(
-                cycle_max_abs_powers
-            ),
-
+            "mean_cycle_max_abs_power": np.mean(cycle_max_abs_powers),
             "std_cycle_max_abs_power": (
-                np.std(
-                    cycle_max_abs_powers,
-                    ddof=1
-                )
+                np.std(cycle_max_abs_powers, ddof=1)
                 if len(cycle_max_abs_powers) > 1
                 else np.nan
             ),
-
-            "overall_max_abs_power": np.max(
-                cycle_max_abs_powers
-            ),
-
-            "n_cycles": len(
-                cycle_max_abs_powers
-            )
+            "overall_max_abs_power": np.max(cycle_max_abs_powers),
+            "n_cycles": len(cycle_max_abs_powers)
         }
-
-    # =====================================================
-    # PROCESS FILES
-    # =====================================================
 
     for file in csv_files:
 
-        file_path = os.path.join(
-            folder_path,
-            file
-        )
+        file_path = os.path.join(folder_path, file)
 
         resistance = read_load_resistance(file_path)
 
@@ -2319,134 +2297,82 @@ def analyse_impedance_folder(folder_path):
         if len(df) == 0:
             continue
 
-        if "voltage" not in df.columns:
-            print(f"Skipping {file}: no voltage column found.")
+        has_voltage = "voltage" in df.columns
+        has_current = "current" in df.columns
+
+        if not has_voltage and not has_current:
+            print(f"Skipping {file}: no voltage or current column found.")
             continue
 
-        if "current_A" not in df.columns:
-            print(f"Skipping {file}: no current column found.")
-            continue
-
-        # =================================================
-        # VOLTAGE METRICS
-        # =================================================
-
-        voltage_peak_stats, voltage_rms = (
-            calculate_voltage_metrics(df)
-        )
-
-        # =================================================
-        # CURRENT METRICS
-        # =================================================
-
-        current_peak_stats, current_rms = (
-            calculate_current_metrics(df)
-        )
-
-        # =================================================
-        # POWER METRICS
-        # =================================================
-
-        peak_power = (
-            voltage_peak_stats["mean_peak"]
-            *
-            current_peak_stats["mean_peak"]
-        )
-
-        rms_power = (
-            voltage_rms
-            *
-            current_rms
-        )
-
-        cycle_power_stats = (
-            calculate_cycle_power_metrics(df)
-        )
-
-        results.append({
-
+        row = {
             "File": file,
-
             "Load Resistance (Ohm)": resistance,
+            "Load Resistance Label": resistance_label(resistance)
+        }
 
-            "Load Resistance Label": resistance_label(
-                resistance
-            ),
+        if has_voltage:
 
-            # ---------------------------------------------
-            # Voltage
-            # ---------------------------------------------
+            voltage_peak_stats, voltage_rms = calculate_voltage_metrics(df)
 
-            "Cycles Analysed Voltage": (
-                voltage_peak_stats["n_cycles"]
-            ),
+            row.update({
+                "Cycles Analysed Voltage": voltage_peak_stats["n_cycles"],
+                "Mean Vpeak (V)": voltage_peak_stats["mean_peak"],
+                "STD Vpeak (V)": voltage_peak_stats["std_peak"],
+                "Vrms (V)": voltage_rms
+            })
 
-            "Mean Vpeak (V)": (
-                voltage_peak_stats["mean_peak"]
-            ),
+        else:
 
-            "STD Vpeak (V)": (
-                voltage_peak_stats["std_peak"]
-            ),
+            row.update({
+                "Cycles Analysed Voltage": np.nan,
+                "Mean Vpeak (V)": np.nan,
+                "STD Vpeak (V)": np.nan,
+                "Vrms (V)": np.nan
+            })
 
-            "Vrms (V)": voltage_rms,
+        if has_current:
 
-            # ---------------------------------------------
-            # Current
-            # ---------------------------------------------
+            current_peak_stats, current_rms = calculate_current_metrics(df)
 
-            "Cycles Analysed Current": (
-                current_peak_stats["n_cycles"]
-            ),
+            row.update({
+                "Cycles Analysed Current": current_peak_stats["n_cycles"],
+                "Mean Ipeak (A)": current_peak_stats["mean_peak"],
+                "STD Ipeak (A)": current_peak_stats["std_peak"],
+                "Irms (A)": current_rms
+            })
 
-            "Mean Ipeak (A)": (
-                current_peak_stats["mean_peak"]
-            ),
+        else:
 
-            "STD Ipeak (A)": (
-                current_peak_stats["std_peak"]
-            ),
+            row.update({
+                "Cycles Analysed Current": np.nan,
+                "Mean Ipeak (A)": np.nan,
+                "STD Ipeak (A)": np.nan,
+                "Irms (A)": np.nan
+            })
 
-            "Irms (A)": current_rms,
+        if has_voltage and has_current:
 
-            # ---------------------------------------------
-            # Power
-            # ---------------------------------------------
+            cycle_power_stats = calculate_cycle_power_metrics(df)
 
-            "Peak Power Vpeak*Ipeak (W)": (
-                peak_power
-            ),
+            row.update({
+                "RMS Power Vrms*Irms (W)": row["Vrms (V)"] * row["Irms (A)"],
+                "Mean Cycle Max Instantaneous Power max(|V*I|) (W)": cycle_power_stats["mean_cycle_max_abs_power"],
+                "STD Cycle Max Instantaneous Power max(|V*I|) (W)": cycle_power_stats["std_cycle_max_abs_power"],
+                "Overall Max Instantaneous Power max(|V*I|) (W)": cycle_power_stats["overall_max_abs_power"],
+                "Cycles Analysed Power": cycle_power_stats["n_cycles"]
+            })
 
-            "RMS Power Vrms*Irms (W)": (
-                rms_power
-            ),
+        else:
 
-            "Mean Cycle Max Instantaneous Power max(|V*I|) (W)": (
-                cycle_power_stats[
-                    "mean_cycle_max_abs_power"
-                ]
-            ),
+            row.update({
+                "RMS Power Vrms*Irms (W)": np.nan,
+                "Mean Cycle Max Instantaneous Power max(|V*I|) (W)": np.nan,
+                "STD Cycle Max Instantaneous Power max(|V*I|) (W)": np.nan,
+                "Overall Max Instantaneous Power max(|V*I|) (W)": np.nan,
+                "Cycles Analysed Power": np.nan
+            })
 
-            "STD Cycle Max Instantaneous Power max(|V*I|) (W)": (
-                cycle_power_stats[
-                    "std_cycle_max_abs_power"
-                ]
-            ),
-
-            "Overall Max Instantaneous Power max(|V*I|) (W)": (
-                cycle_power_stats[
-                    "overall_max_abs_power"
-                ]
-            ),
-
-            "Cycles Analysed Power": (
-                cycle_power_stats["n_cycles"]
-            )
-        })
-
-    # =====================================================
-    # CREATE SUMMARY TABLE
-    # =====================================================
+        results.append(row)
 
     summary_df = pd.DataFrame(results)
 
@@ -2457,19 +2383,12 @@ def analyse_impedance_folder(folder_path):
         "Load Resistance (Ohm)"
     ).reset_index(drop=True)
 
-    # =====================================================
-    # SAVE EXCEL
-    # =====================================================
-
     output_excel = os.path.join(
         folder_path,
         "IMPEDANCE_ANALYSIS.xlsx"
     )
 
-    with pd.ExcelWriter(
-        output_excel,
-        engine="openpyxl"
-    ) as writer:
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
 
         summary_df.to_excel(
             writer,
@@ -2477,24 +2396,48 @@ def analyse_impedance_folder(folder_path):
             index=False
         )
 
-    # =====================================================
-    # GENERIC PLOTTING FUNCTION
-    # =====================================================
+    def has_valid_column(col):
+        return (
+            col in summary_df.columns
+            and summary_df[col].notna().any()
+        )
 
-    def make_impedance_plot(
-        voltage_col,
-        current_col,
-        power_col,
-        title,
-        filename,
-        voltage_label,
-        current_label,
-        power_label
-    ):
+    def make_single_axis_plot(y_col, ylabel, title, filename, colour):
 
-        max_power_idx = summary_df[
-            power_col
-        ].idxmax()
+        if not has_valid_column(y_col):
+            return None
+
+        plt.figure(figsize=(8, 6))
+
+        plt.plot(
+            summary_df["Load Resistance (Ohm)"],
+            summary_df[y_col],
+            marker="o",
+            color=colour,
+            label=ylabel
+        )
+
+        plt.xscale("log")
+        plt.xlabel("Load Resistance (Ohm)")
+        plt.ylabel(ylabel)
+        plt.title(title)
+        plt.grid(True, which="both", linestyle="--", alpha=0.4)
+        plt.legend()
+        plt.tight_layout()
+
+        plot_path = os.path.join(folder_path, filename)
+
+        plt.savefig(plot_path, dpi=300)
+        plt.close()
+
+        return plot_path
+
+    def make_power_plot(power_col, title, filename):
+
+        if not has_valid_column(power_col):
+            return None
+
+        max_power_idx = summary_df[power_col].idxmax()
 
         max_power_R = summary_df.loc[
             max_power_idx,
@@ -2511,114 +2454,31 @@ def analyse_impedance_folder(folder_path):
             power_col
         ]
 
-        fig, ax1 = plt.subplots(figsize=(10, 6))
+        plt.figure(figsize=(8, 6))
 
-        ax1.set_xscale("log")
-
-        # -------------------------------------------------
-        # Voltage
-        # -------------------------------------------------
-
-        voltage_line, = ax1.plot(
-            summary_df["Load Resistance (Ohm)"],
-            summary_df[voltage_col],
-            marker="o",
-            color="tab:blue",
-            label=voltage_label
-        )
-
-        ax1.set_xlabel(
-            "Load Resistance (Ohm)"
-        )
-
-        ax1.set_ylabel(
-            "Voltage (V)",
-            color="tab:blue"
-        )
-
-        ax1.tick_params(
-            axis="y",
-            labelcolor="tab:blue"
-        )
-
-        # -------------------------------------------------
-        # Current
-        # -------------------------------------------------
-
-        ax2 = ax1.twinx()
-
-        current_line, = ax2.plot(
-            summary_df["Load Resistance (Ohm)"],
-            summary_df[current_col],
-            marker="s",
-            color="tab:orange",
-            label=current_label
-        )
-
-        ax2.set_ylabel(
-            "Current (A)",
-            color="tab:orange"
-        )
-
-        ax2.tick_params(
-            axis="y",
-            labelcolor="tab:orange"
-        )
-
-        # -------------------------------------------------
-        # Power
-        # -------------------------------------------------
-
-        ax3 = ax1.twinx()
-
-        ax3.spines["right"].set_position(
-            ("outward", 70)
-        )
-
-        power_line, = ax3.plot(
+        plt.plot(
             summary_df["Load Resistance (Ohm)"],
             summary_df[power_col],
             marker="^",
             linestyle=":",
             linewidth=2,
             color="tab:green",
-            label=power_label
+            label="Power"
         )
 
-        ax3.set_ylabel(
-            "Power (W)",
-            color="tab:green"
-        )
-
-        ax3.tick_params(
-            axis="y",
-            labelcolor="tab:green"
-        )
-
-        # -------------------------------------------------
-        # Max Power Marker
-        # -------------------------------------------------
-
-        ax1.axvline(
+        plt.axvline(
             max_power_R,
             color="black",
             linestyle="--",
             linewidth=1.5
         )
 
-        ax3.annotate(
-            (
-                f"Max power\n"
-                f"R = {max_power_label}\n"
-                f"P = {max_power:.3e} W"
-            ),
+        plt.annotate(
+            f"Max power\nR = {max_power_label}\nP = {max_power:.3e} W",
             xy=(max_power_R, max_power),
             xytext=(10, 25),
             textcoords="offset points",
-            arrowprops=dict(
-                arrowstyle="->",
-                color="black"
-            ),
+            arrowprops=dict(arrowstyle="->", color="black"),
             fontsize=9,
             bbox=dict(
                 boxstyle="round,pad=0.3",
@@ -2628,158 +2488,657 @@ def analyse_impedance_folder(folder_path):
             )
         )
 
-        # -------------------------------------------------
-        # Legend
-        # -------------------------------------------------
-
-        lines = [
-            voltage_line,
-            current_line,
-            power_line
-        ]
-
-        labels = [
-            line.get_label()
-            for line in lines
-        ]
-
-        ax1.legend(
-            lines,
-            labels,
-            loc="best"
-        )
-
-        ax1.grid(
-            True,
-            which="both",
-            linestyle="--",
-            alpha=0.4
-        )
-
+        plt.xscale("log")
+        plt.xlabel("Load Resistance (Ohm)")
+        plt.ylabel("Power (W)")
         plt.title(title)
-
+        plt.grid(True, which="both", linestyle="--", alpha=0.4)
+        plt.legend()
         plt.tight_layout()
 
-        plot_path = os.path.join(
-            folder_path,
-            filename
-        )
+        plot_path = os.path.join(folder_path, filename)
 
-        plt.savefig(
-            plot_path,
-            dpi=300
-        )
-
+        plt.savefig(plot_path, dpi=300)
         plt.close()
 
-        return (
-            plot_path,
-            max_power_label,
-            max_power
-        )
+        return plot_path
 
-    # =====================================================
-    # PEAK IMPEDANCE PLOT
-    # =====================================================
-
-    peak_plot, peak_R_label, peak_power_max = (
-        make_impedance_plot(
-
-            voltage_col="Mean Vpeak (V)",
-
-            current_col="Mean Ipeak (A)",
-
-            power_col="Mean Cycle Max Instantaneous Power max(|V*I|) (W)",
-
-            title="Impedance Matching Using Peak Values",
-
-            filename="Impedance_Peak_Voltage_Current_Power.png",
-
-            voltage_label="Mean Vpeak (V)",
-
-            current_label="Mean Ipeak (A)",
-
-            power_label="Mean Cycle Max |V×I| (W)"
-        )
+    voltage_peak_plot = make_single_axis_plot(
+        "Mean Vpeak (V)",
+        "Mean Vpeak (V)",
+        "Impedance Matching: Mean Peak Voltage",
+        "Impedance_Peak_Voltage.png",
+        "tab:blue"
     )
 
-    # =====================================================
-    # RMS IMPEDANCE PLOT
-    # =====================================================
-
-    rms_plot, rms_R_label, rms_power_max = (
-        make_impedance_plot(
-
-            voltage_col="Vrms (V)",
-
-            current_col="Irms (A)",
-
-            power_col="RMS Power Vrms*Irms (W)",
-
-            title="Impedance Matching Using RMS Values",
-
-            filename="Impedance_RMS_Voltage_Current_Power.png",
-
-            voltage_label="Vrms (V)",
-
-            current_label="Irms (A)",
-
-            power_label="RMS Power Vrms×Irms (W)"
-        )
+    voltage_rms_plot = make_single_axis_plot(
+        "Vrms (V)",
+        "Vrms (V)",
+        "Impedance Matching: RMS Voltage",
+        "Impedance_RMS_Voltage.png",
+        "tab:blue"
     )
 
-    # =====================================================
-    # FINISH
-    # =====================================================
-
-    print(
-        f"Saved impedance analysis:\n"
-        f"{output_excel}"
+    current_peak_plot = make_single_axis_plot(
+        "Mean Ipeak (A)",
+        "Mean Ipeak (A)",
+        "Impedance Matching: Mean Peak Current",
+        "Impedance_Peak_Current.png",
+        "tab:orange"
     )
 
-    print(
-        f"Saved peak impedance plot:\n"
-        f"{peak_plot}"
+    current_rms_plot = make_single_axis_plot(
+        "Irms (A)",
+        "Irms (A)",
+        "Impedance Matching: RMS Current",
+        "Impedance_RMS_Current.png",
+        "tab:orange"
     )
 
-    print(
-        f"Saved RMS impedance plot:\n"
-        f"{rms_plot}"
+    rms_power_plot = make_power_plot(
+        "RMS Power Vrms*Irms (W)",
+        "Impedance Matching: RMS Power",
+        "Impedance_RMS_Power.png"
     )
 
-    print(
-        f"Maximum peak power at "
-        f"{peak_R_label}: "
-        f"{peak_power_max:.3e} W"
+    instant_power_plot = make_power_plot(
+        "Mean Cycle Max Instantaneous Power max(|V*I|) (W)",
+        "Impedance Matching: Mean Cycle Max Instantaneous Power",
+        "Impedance_Instantaneous_Power.png"
     )
 
-    print(
-        f"Maximum RMS power at "
-        f"{rms_R_label}: "
-        f"{rms_power_max:.3e} W"
-    )
+    print(f"Saved impedance analysis:\n{output_excel}")
+
+    for plot in [
+        voltage_peak_plot,
+        voltage_rms_plot,
+        current_peak_plot,
+        current_rms_plot,
+        rms_power_plot,
+        instant_power_plot
+    ]:
+        if plot is not None:
+            print(f"Saved plot:\n{plot}")
 
     return output_excel
+
+# def analyse_impedance_folder(folder_path):
+
+#     results = []
+
+#     csv_files = sorted([
+#         f for f in os.listdir(folder_path)
+#         if f.endswith(".csv")
+#         and "_analysis" not in f
+#         and "_analysed" not in f
+#         and "IMPEDANCE_ANALYSIS" not in f
+#     ])
+
+#     if len(csv_files) == 0:
+#         raise ValueError("No CSV files found.")
+
+#     # =====================================================
+#     # RESISTANCE LABELS
+#     # =====================================================
+
+#     def resistance_label(resistance):
+
+#         if resistance >= 1e9:
+#             return f"{resistance / 1e9:g}G"
+
+#         elif resistance >= 1e6:
+#             return f"{resistance / 1e6:g}M"
+
+#         elif resistance >= 1e3:
+#             return f"{resistance / 1e3:g}k"
+
+#         else:
+#             return f"{resistance:g}"
+
+#     # =====================================================
+#     # CYCLE INSTANTANEOUS POWER
+#     # =====================================================
+
+#     def calculate_cycle_power_metrics(df):
+
+#         df = df.copy()
+
+#         df["instantaneous_power"] = (
+#             df["voltage"] * df["current"]
+#         )
+
+#         cycles = find_cycles(df)
+
+#         cycle_max_abs_powers = []
+
+#         for start, end in cycles:
+
+#             cycle = df.loc[start:end]
+
+#             if len(cycle) < MIN_CYCLE_POINTS:
+#                 continue
+
+#             max_abs_power = np.max(
+#                 np.abs(cycle["instantaneous_power"])
+#             )
+
+#             cycle_max_abs_powers.append(max_abs_power)
+
+#         if len(cycle_max_abs_powers) == 0:
+
+#             return {
+#                 "mean_cycle_max_abs_power": np.nan,
+#                 "std_cycle_max_abs_power": np.nan,
+#                 "overall_max_abs_power": np.nan,
+#                 "n_cycles": 0
+#             }
+
+#         return {
+
+#             "mean_cycle_max_abs_power": np.mean(
+#                 cycle_max_abs_powers
+#             ),
+
+#             "std_cycle_max_abs_power": (
+#                 np.std(
+#                     cycle_max_abs_powers,
+#                     ddof=1
+#                 )
+#                 if len(cycle_max_abs_powers) > 1
+#                 else np.nan
+#             ),
+
+#             "overall_max_abs_power": np.max(
+#                 cycle_max_abs_powers
+#             ),
+
+#             "n_cycles": len(
+#                 cycle_max_abs_powers
+#             )
+#         }
+
+#     # =====================================================
+#     # PROCESS FILES
+#     # =====================================================
+
+#     for file in csv_files:
+
+#         file_path = os.path.join(
+#             folder_path,
+#             file
+#         )
+
+#         resistance = read_load_resistance(file_path)
+
+#         if resistance is None:
+#             print(f"Skipping {file}: no load resistance found.")
+#             continue
+
+#         df = load_data(file_path)
+
+#         if len(df) == 0:
+#             continue
+
+#         if "voltage" not in df.columns:
+#             print(f"Skipping {file}: no voltage column found.")
+#             continue
+
+#         if "current" not in df.columns:
+#             print(f"Skipping {file}: no current column found.")
+#             continue
+
+#         # =================================================
+#         # VOLTAGE METRICS
+#         # =================================================
+
+#         voltage_peak_stats, voltage_rms = (
+#             calculate_voltage_metrics(df)
+#         )
+
+#         # =================================================
+#         # CURRENT METRICS
+#         # =================================================
+
+#         current_peak_stats, current_rms = (
+#             calculate_current_metrics(df)
+#         )
+
+#         # =================================================
+#         # POWER METRICS
+#         # =================================================
+
+#         peak_power = (
+#             voltage_peak_stats["mean_peak"]
+#             *
+#             current_peak_stats["mean_peak"]
+#         )
+
+#         rms_power = (
+#             voltage_rms
+#             *
+#             current_rms
+#         )
+
+#         cycle_power_stats = (
+#             calculate_cycle_power_metrics(df)
+#         )
+
+#         results.append({
+
+#             "File": file,
+
+#             "Load Resistance (Ohm)": resistance,
+
+#             "Load Resistance Label": resistance_label(
+#                 resistance
+#             ),
+
+#             # ---------------------------------------------
+#             # Voltage
+#             # ---------------------------------------------
+
+#             "Cycles Analysed Voltage": (
+#                 voltage_peak_stats["n_cycles"]
+#             ),
+
+#             "Mean Vpeak (V)": (
+#                 voltage_peak_stats["mean_peak"]
+#             ),
+
+#             "STD Vpeak (V)": (
+#                 voltage_peak_stats["std_peak"]
+#             ),
+
+#             "Vrms (V)": voltage_rms,
+
+#             # ---------------------------------------------
+#             # Current
+#             # ---------------------------------------------
+
+#             "Cycles Analysed Current": (
+#                 current_peak_stats["n_cycles"]
+#             ),
+
+#             "Mean Ipeak (A)": (
+#                 current_peak_stats["mean_peak"]
+#             ),
+
+#             "STD Ipeak (A)": (
+#                 current_peak_stats["std_peak"]
+#             ),
+
+#             "Irms (A)": current_rms,
+
+#             # ---------------------------------------------
+#             # Power
+#             # ---------------------------------------------
+
+#             "Peak Power Vpeak*Ipeak (W)": (
+#                 peak_power
+#             ),
+
+#             "RMS Power Vrms*Irms (W)": (
+#                 rms_power
+#             ),
+
+#             "Mean Cycle Max Instantaneous Power max(|V*I|) (W)": (
+#                 cycle_power_stats[
+#                     "mean_cycle_max_abs_power"
+#                 ]
+#             ),
+
+#             "STD Cycle Max Instantaneous Power max(|V*I|) (W)": (
+#                 cycle_power_stats[
+#                     "std_cycle_max_abs_power"
+#                 ]
+#             ),
+
+#             "Overall Max Instantaneous Power max(|V*I|) (W)": (
+#                 cycle_power_stats[
+#                     "overall_max_abs_power"
+#                 ]
+#             ),
+
+#             "Cycles Analysed Power": (
+#                 cycle_power_stats["n_cycles"]
+#             )
+#         })
+
+#     # =====================================================
+#     # CREATE SUMMARY TABLE
+#     # =====================================================
+
+#     summary_df = pd.DataFrame(results)
+
+#     if len(summary_df) == 0:
+#         raise ValueError("No valid impedance data found.")
+
+#     summary_df = summary_df.sort_values(
+#         "Load Resistance (Ohm)"
+#     ).reset_index(drop=True)
+
+#     # =====================================================
+#     # SAVE EXCEL
+#     # =====================================================
+
+#     output_excel = os.path.join(
+#         folder_path,
+#         "IMPEDANCE_ANALYSIS.xlsx"
+#     )
+
+#     with pd.ExcelWriter(
+#         output_excel,
+#         engine="openpyxl"
+#     ) as writer:
+
+#         summary_df.to_excel(
+#             writer,
+#             sheet_name="SUMMARY",
+#             index=False
+#         )
+
+#     # =====================================================
+#     # GENERIC PLOTTING FUNCTION
+#     # =====================================================
+
+#     def make_impedance_plot(
+#         voltage_col,
+#         current_col,
+#         power_col,
+#         title,
+#         filename,
+#         voltage_label,
+#         current_label,
+#         power_label
+#     ):
+
+#         max_power_idx = summary_df[
+#             power_col
+#         ].idxmax()
+
+#         max_power_R = summary_df.loc[
+#             max_power_idx,
+#             "Load Resistance (Ohm)"
+#         ]
+
+#         max_power_label = summary_df.loc[
+#             max_power_idx,
+#             "Load Resistance Label"
+#         ]
+
+#         max_power = summary_df.loc[
+#             max_power_idx,
+#             power_col
+#         ]
+
+#         fig, ax1 = plt.subplots(figsize=(10, 6))
+
+#         ax1.set_xscale("log")
+
+#         # -------------------------------------------------
+#         # Voltage
+#         # -------------------------------------------------
+
+#         voltage_line, = ax1.plot(
+#             summary_df["Load Resistance (Ohm)"],
+#             summary_df[voltage_col],
+#             marker="o",
+#             color="tab:blue",
+#             label=voltage_label
+#         )
+
+#         ax1.set_xlabel(
+#             "Load Resistance (Ohm)"
+#         )
+
+#         ax1.set_ylabel(
+#             "Voltage (V)",
+#             color="tab:blue"
+#         )
+
+#         ax1.tick_params(
+#             axis="y",
+#             labelcolor="tab:blue"
+#         )
+
+#         # -------------------------------------------------
+#         # Current
+#         # -------------------------------------------------
+
+#         ax2 = ax1.twinx()
+
+#         current_line, = ax2.plot(
+#             summary_df["Load Resistance (Ohm)"],
+#             summary_df[current_col],
+#             marker="s",
+#             color="tab:orange",
+#             label=current_label
+#         )
+
+#         ax2.set_ylabel(
+#             "Current (A)",
+#             color="tab:orange"
+#         )
+
+#         ax2.tick_params(
+#             axis="y",
+#             labelcolor="tab:orange"
+#         )
+
+#         # -------------------------------------------------
+#         # Power
+#         # -------------------------------------------------
+
+#         ax3 = ax1.twinx()
+
+#         ax3.spines["right"].set_position(
+#             ("outward", 70)
+#         )
+
+#         power_line, = ax3.plot(
+#             summary_df["Load Resistance (Ohm)"],
+#             summary_df[power_col],
+#             marker="^",
+#             linestyle=":",
+#             linewidth=2,
+#             color="tab:green",
+#             label=power_label
+#         )
+
+#         ax3.set_ylabel(
+#             "Power (W)",
+#             color="tab:green"
+#         )
+
+#         ax3.tick_params(
+#             axis="y",
+#             labelcolor="tab:green"
+#         )
+
+#         # -------------------------------------------------
+#         # Max Power Marker
+#         # -------------------------------------------------
+
+#         ax1.axvline(
+#             max_power_R,
+#             color="black",
+#             linestyle="--",
+#             linewidth=1.5
+#         )
+
+#         ax3.annotate(
+#             (
+#                 f"Max power\n"
+#                 f"R = {max_power_label}\n"
+#                 f"P = {max_power:.3e} W"
+#             ),
+#             xy=(max_power_R, max_power),
+#             xytext=(10, 25),
+#             textcoords="offset points",
+#             arrowprops=dict(
+#                 arrowstyle="->",
+#                 color="black"
+#             ),
+#             fontsize=9,
+#             bbox=dict(
+#                 boxstyle="round,pad=0.3",
+#                 fc="white",
+#                 ec="black",
+#                 alpha=0.8
+#             )
+#         )
+
+#         # -------------------------------------------------
+#         # Legend
+#         # -------------------------------------------------
+
+#         lines = [
+#             voltage_line,
+#             current_line,
+#             power_line
+#         ]
+
+#         labels = [
+#             line.get_label()
+#             for line in lines
+#         ]
+
+#         ax1.legend(
+#             lines,
+#             labels,
+#             loc="best"
+#         )
+
+#         ax1.grid(
+#             True,
+#             which="both",
+#             linestyle="--",
+#             alpha=0.4
+#         )
+
+#         plt.title(title)
+
+#         plt.tight_layout()
+
+#         plot_path = os.path.join(
+#             folder_path,
+#             filename
+#         )
+
+#         plt.savefig(
+#             plot_path,
+#             dpi=300
+#         )
+
+#         plt.close()
+
+#         return (
+#             plot_path,
+#             max_power_label,
+#             max_power
+#         )
+
+#     # =====================================================
+#     # PEAK IMPEDANCE PLOT
+#     # =====================================================
+
+#     peak_plot, peak_R_label, peak_power_max = (
+#         make_impedance_plot(
+
+#             voltage_col="Mean Vpeak (V)",
+
+#             current_col="Mean Ipeak (A)",
+
+#             power_col="Mean Cycle Max Instantaneous Power max(|V*I|) (W)",
+
+#             title="Impedance Matching Using Peak Values",
+
+#             filename="Impedance_Peak_Voltage_Current_Power.png",
+
+#             voltage_label="Mean Vpeak (V)",
+
+#             current_label="Mean Ipeak (A)",
+
+#             power_label="Mean Cycle Max |V×I| (W)"
+#         )
+#     )
+
+#     # =====================================================
+#     # RMS IMPEDANCE PLOT
+#     # =====================================================
+
+#     rms_plot, rms_R_label, rms_power_max = (
+#         make_impedance_plot(
+
+#             voltage_col="Vrms (V)",
+
+#             current_col="Irms (A)",
+
+#             power_col="RMS Power Vrms*Irms (W)",
+
+#             title="Impedance Matching Using RMS Values",
+
+#             filename="Impedance_RMS_Voltage_Current_Power.png",
+
+#             voltage_label="Vrms (V)",
+
+#             current_label="Irms (A)",
+
+#             power_label="RMS Power Vrms×Irms (W)"
+#         )
+#     )
+
+#     # =====================================================
+#     # FINISH
+#     # =====================================================
+
+#     print(
+#         f"Saved impedance analysis:\n"
+#         f"{output_excel}"
+#     )
+
+#     print(
+#         f"Saved peak impedance plot:\n"
+#         f"{peak_plot}"
+#     )
+
+#     print(
+#         f"Saved RMS impedance plot:\n"
+#         f"{rms_plot}"
+#     )
+
+#     print(
+#         f"Maximum peak power at "
+#         f"{peak_R_label}: "
+#         f"{peak_power_max:.3e} W"
+#     )
+
+#     print(
+#         f"Maximum RMS power at "
+#         f"{rms_R_label}: "
+#         f"{rms_power_max:.3e} W"
+#     )
+
+#     return output_excel
 
 
 '''
 DATA PROCESSING FUNCTIONS
 '''
 
-INA_GAIN = 989
-SHUNT_RESISTOR = 1e6  # 1 MΩ
+
 
 contact_start_threshold = 0.5
 contact_end_threshold = 0.2
 
 
-def amplified_voltage_to_current(amplified_voltage):
-    """
-    Converts PCB amplified current-output voltage back to real current in amps.
+# def amplified_voltage_to_current(amplified_voltage):
+#     """
+#     Converts PCB amplified current-output voltage back to real current in amps.
 
-    I = Vout / (INA gain * shunt resistance)
-    """
-    return amplified_voltage / (INA_GAIN * SHUNT_RESISTOR)
+#     I = Vout / (INA gain * shunt resistance)
+#     """
+#     return amplified_voltage / (INA_GAIN * SHUNT_RESISTOR)
 
 
 def read_target_force(file_path):
@@ -2802,9 +3161,7 @@ def read_target_force(file_path):
 
     return target_force
 
-
 def read_load_resistance(file_path):
-    load_resistance = None
 
     with open(file_path, "r") as f:
         for line in f:
@@ -2813,30 +3170,22 @@ def read_load_resistance(file_path):
                 parts = line.strip().split(",")
 
                 if len(parts) >= 2:
-                    try:
-                        load_resistance = float(parts[1])
-                    except:
-                        pass
+                    value = parts[1].strip()
+
+                    if value.lower() in ["inf", "infinity", "open"]:
+                        return np.inf
+
+                    if value.lower() in ["0", "short"]:
+                        return 0
+
+                    return float(value)
 
             if "time" in line.lower():
                 break
 
-    return load_resistance
-
+    return None
 
 def load_data(file_path):
-    """
-    Loads old or new CSV files.
-
-    Old format:
-        time, force, voltage
-
-    New dual format:
-        time, force, voltage, current_signal
-
-    current_signal is the raw amplified PCB voltage.
-    current is the converted real current in amps.
-    """
 
     data_start = 0
 
@@ -2866,52 +3215,132 @@ def load_data(file_path):
 
     if df.shape[1] >= 4:
         df = df.iloc[:, :4]
-        df.columns = [
-            "time",
-            "force",
-            "voltage",
-            "current_A"
-        ]
+        df.columns = ["time", "force", "voltage", "current"]
 
     elif df.shape[1] >= 3:
         df = df.iloc[:, :3]
-        df.columns = [
-            "time",
-            "force",
-            "voltage"
-        ]
+        df.columns = ["time", "force", "voltage"]
 
     elif df.shape[1] >= 2:
         df = df.iloc[:, :2]
-        df.columns = [
-            "time",
-            "force"
-        ]
+        df.columns = ["time", "force"]
 
     else:
         raise ValueError(f"Not enough columns in {file_path}")
 
     for col in df.columns:
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        )
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = df.dropna().reset_index(drop=True)
+    # Only require time and force.
+    # Do NOT drop rows just because voltage/current is blank.
+    df = df.dropna(subset=["time", "force"]).reset_index(drop=True)
+
+    # Remove voltage column if it is completely empty
+    if "voltage" in df.columns and df["voltage"].isna().all():
+        df = df.drop(columns=["voltage"])
+
+    # Remove current column if it is completely empty
+    if "current" in df.columns and df["current"].isna().all():
+        df = df.drop(columns=["current"])
 
     # Remove any out-of-order time glitches
-    if "time" in df.columns:
-        bad_rows = df.index[
-            df["time"].shift(-1) < df["time"]
-        ]
+    bad_rows = df.index[
+        df["time"].shift(-1) < df["time"]
+    ]
 
-        df = df.drop(bad_rows).reset_index(drop=True)
-
-    # Convert amplified current signal to real current
-    if "current_signal" in df.columns:
-        df["current"] = df["current_A"]
+    df = df.drop(bad_rows).reset_index(drop=True)
 
     return df
+
+
+# def load_data(file_path):
+#     """
+#     Loads old or new CSV files.
+
+#     Old format:
+#         time, force, voltage
+
+#     New dual format:
+#         time, force, voltage, current_signal
+
+#     current_signal is the raw amplified PCB voltage.
+#     current is the converted real current in amps.
+#     """
+
+#     data_start = 0
+
+#     with open(file_path, "r") as f:
+#         for i, line in enumerate(f):
+#             line = line.strip()
+
+#             if not line:
+#                 continue
+
+#             if line.startswith("#"):
+#                 continue
+
+#             if "time" in line.lower():
+#                 continue
+
+#             data_start = i
+#             break
+
+#     df = pd.read_csv(
+#         file_path,
+#         sep=r"[\s,\t,]+",
+#         engine="python",
+#         skiprows=data_start,
+#         header=None
+#     )
+
+#     if df.shape[1] >= 4:
+#         df = df.iloc[:, :4]
+#         df.columns = [
+#             "time",
+#             "force",
+#             "voltage",
+#             "current_A"
+#         ]
+
+#     elif df.shape[1] >= 3:
+#         df = df.iloc[:, :3]
+#         df.columns = [
+#             "time",
+#             "force",
+#             "voltage"
+#         ]
+
+#     elif df.shape[1] >= 2:
+#         df = df.iloc[:, :2]
+#         df.columns = [
+#             "time",
+#             "force"
+#         ]
+
+#     else:
+#         raise ValueError(f"Not enough columns in {file_path}")
+
+#     for col in df.columns:
+#         df[col] = pd.to_numeric(
+#             df[col],
+#             errors="coerce"
+#         )
+
+#     df = df.dropna().reset_index(drop=True)
+
+#     # Remove any out-of-order time glitches
+#     if "time" in df.columns:
+#         bad_rows = df.index[
+#             df["time"].shift(-1) < df["time"]
+#         ]
+
+#         df = df.drop(bad_rows).reset_index(drop=True)
+
+#     # Convert amplified current signal to real current
+#     if "current_signal" in df.columns:
+#         df["current"] = df["current_A"]
+
+#     return df
 
 
 def find_cycles(
