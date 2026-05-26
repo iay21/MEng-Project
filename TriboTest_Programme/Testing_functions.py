@@ -5,6 +5,7 @@ import os
 import csv
 import datetime
 import pyvisa
+import numpy as np
 
 
 
@@ -46,6 +47,7 @@ no_slide_cycles = 2
 range_of_forces = [5, 10, 15, 20, 25, 30]
 
 IMPEDANCE_RESISTANCES = [
+    ("SC", 0),
     ("10k", 10e3),
     ("100k", 100e3),
     ("549k", 549e3),
@@ -55,9 +57,14 @@ IMPEDANCE_RESISTANCES = [
     ("50M", 50e6),
     ("100M", 100e6),
     ("1G", 1e9),
+    ("OC", np.inf)
 ]
 
 def format_resistance(r):
+    if r == 0:
+        return "Short Circuit"
+    if r == np.inf:
+        return "Open Circuit"
     if r >= 1e9:
         return f"{r/1e9:g}G"
     elif r >= 1e6:
@@ -102,14 +109,14 @@ latest_force = None
 latest_voltage = None
 latest_current_output_voltage = None
 latest_current_A = None
-latest_current_nA = None
+latest_current_uA = None
 
 csv_writer = None
 current_log_file = None
 csv_lock = threading.Lock()
 
 load_resistance = 1e6   # Ohms (example default)
-measurement_mode = "VOLTAGE"   # or "CURRENT" or "DUAL"
+measurement_mode = "DUAL"   # or "CURRENT" or "DUAL"
 counter_material = "UNKNOWN"
 z_cal_test = "DEFAULT"  # Test name/material for z calibration
 
@@ -150,8 +157,9 @@ def init_keithleys():
     keithley_current = rm.open_resource(CURRENT_KEITHLEY_RESOURCE)
     setup_keithley(keithley_current, "Current Keithley")
 
-CURRENT_SHUNT_OHM = 1_000
-INA_GAIN = 1 + (49_400 / 50)   # ≈ 989 for 50 ohm RG
+CURRENT_SHUNT_OHM = 50
+INA_GAIN = 1
+CURRENT_DC_OFFSET = 0.005 #mV
 
 
 def cleanup_keithleys():
@@ -621,7 +629,6 @@ def stop_test():
             print("🛑 Test logging stopped.")
         current_log_file = None
         csv_writer = None
-
 
 # -----------------------------------------------------------------------------
 # Full Test Protocol

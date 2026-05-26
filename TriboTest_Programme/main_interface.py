@@ -94,7 +94,11 @@ right_frame.grid_columnconfigure(0, weight=1)
 # GRAPH
 # =====================================================
 
-graph_frame = tk.LabelFrame(right_frame, text="Live Force (N)")
+
+graph_frame = tk.LabelFrame(
+    right_frame,
+    text="Live Force, Voltage and Current"
+)
 graph_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
 
@@ -139,9 +143,9 @@ def update_graph():
 
         i_A = Testing_functions.latest_current_A
         if i_A is not None:
-            i_nA = i_A * 1e9
+            i_uA = i_A * 1e6
         else:
-            i_nA = None
+            i_uA = None
 
         t = time.monotonic() - start_time
 
@@ -156,8 +160,8 @@ def update_graph():
         if v is not None:
             voltage_history.append((t, v))
 
-        if i_nA is not None:
-            current_history.append((t, i_nA))
+        if i_uA is not None:
+            current_history.append((t, i_uA))
 
         # -----------------------------
         # Keep only last 60 seconds
@@ -175,16 +179,13 @@ def update_graph():
         if len(force_history) < 2:
             root.after(100, update_graph)
             return
-
-        # if len(voltage_history) > 0:
-        #     t_v, v_vals = zip(*voltage_history)
-        # else:
-        #     t_v, v_vals = [], []
-
-        # if len(current_history) > 0:
-        #     t_i, i_vals = zip(*current_history)
-        # else:
-        #     t_i, i_vals = [], []
+        if(
+            len(force_history) < 2 
+            and len(voltage_history) < 2 
+            and len(current_history) < 2
+        ):
+            root.after(100, update_graph)
+            return
 
 
         ax_force.cla()
@@ -194,7 +195,11 @@ def update_graph():
         # -----------------------------
         # Prepare data
         # -----------------------------
-        t_f, f_vals = zip(*force_history)
+
+        if len(force_history) > 0:
+            t_f, f_vals = zip(*force_history)
+        else:
+            t_f, f_vals = [], []
 
         if len(voltage_history) > 0:
             t_v, v_vals = zip(*voltage_history)
@@ -225,7 +230,7 @@ def update_graph():
         # CURRENT
         # -----------------------------
         ax_current.plot(t_i, i_vals, color="tab:green")
-        ax_current.set_ylabel("Current (nA)", color="tab:green")
+        ax_current.set_ylabel("Current (uA)", color="tab:green")
         ax_current.set_xlabel("Time (s)")
         ax_current.tick_params(axis='y', labelcolor="tab:green")
         ax_current.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
@@ -256,150 +261,15 @@ def update_graph():
 
         set_padded_ylim(ax_force, f_vals, -1, 11, 0.5)
         set_padded_ylim(ax_voltage, v_vals, -5, 5, 0.1)
-        set_padded_ylim(ax_current, i_vals, -10, 10, 0.5)
+        set_padded_ylim(ax_current, i_vals, -0.5, 0.5, 0.05)
 
         fig.tight_layout()
         canvas.draw_idle()
-
-        # # -----------------------------
-        # # Clear plots
-        # # -----------------------------
-        # ax1.cla()
-        # ax2.cla()
-
-        # # -----------------------------
-        # # FORCE plot (left axis)
-        # # -----------------------------
-        # ax1.plot(t_f, f_vals, color="tab:red")
-        # ax1.set_ylabel("Force (N)", color="tab:red")
-        # ax1.tick_params(axis='y', labelcolor="tab:red")
-
-        # # -----------------------------
-        # # VOLTAGE plot (right axis)
-        # # -----------------------------
-        # ax2.plot(t_v, v_vals, color="tab:blue")
-        # ax2.set_ylabel("Voltage (V)", color="tab:blue")
-        # ax2.tick_params(axis='y', labelcolor="tab:blue")
-        # ax2.yaxis.set_label_position("right")
-        # ax2.yaxis.tick_right()
-
-        # # -----------------------------
-        # # X axis (scrolling 60s window)
-        # # -----------------------------
-        # ax1.set_xlim(max(0, t - WINDOW), t)
-        # ax1.set_xlabel("Time (s)", labelpad=8)
-        # ax1.tick_params(axis='x', rotation=25)
-
-        # # -----------------------------
-        # # FORCE Y axis (with padding to prevent clipping)
-        # # -----------------------------
-        # f_min_base, f_max_base = -1, 11
-        # f_data_min = min(f_vals)
-        # f_data_max = max(f_vals)
-
-        # f_range = max(1e-6, f_data_max - f_data_min)
-        # f_pad = max(0.5, 0.05 * f_range)
-
-        # ax1.set_ylim(
-        #     min(f_min_base, f_data_min - f_pad),
-        #     max(f_max_base, f_data_max + f_pad)
-        # )
-
-        # # Set ticks every 1N on force axis
-        # y_min, y_max = ax1.get_ylim()
-        # ax1.set_yticks(range(int(y_min), int(y_max) + 1))
-
-        # # -----------------------------
-        # # VOLTAGE Y axis (with padding)
-        # # -----------------------------
-        # v_min_base, v_max_base = -5, 5
-
-        # if len(v_vals) > 0:
-        #     v_data_min = min(v_vals)
-        #     v_data_max = max(v_vals)
-
-        #     v_range = max(1e-6, v_data_max - v_data_min)
-        #     v_pad = max(0.1, 0.05 * v_range)
-
-        #     ax2.set_ylim(
-        #         min(v_min_base, v_data_min - v_pad),
-        #         max(v_max_base, v_data_max + v_pad)
-        #     )
-        # else:
-        #     ax2.set_ylim(v_min_base, v_max_base)
-
-        # # -----------------------------
-        # # Grid styling
-        # # -----------------------------
-        # ax1.grid(True, which="both", axis="both",
-        #          linestyle="--", linewidth=0.5, alpha=0.7)
-
-        # # -----------------------------
-        # # Layout cleanup
-        # # -----------------------------
-        # fig.tight_layout()
-        # fig.subplots_adjust(right=0.88)
-
-        # canvas.draw_idle()
 
     except Exception as e:
         print("Graph error:", e)
 
     root.after(100, update_graph)
-
-
-# def update_graph():
-#     global update_graph_job
-
-#     if not running or not root.winfo_exists():
-#         return
-    
-#     try:
-#         f = Testing_functions.latest_force
-#         if f is not None:
-#             force_history.append(f)
-#             time_history.append(time.monotonic() - start_time)
-#         ax.clear()
-#         ax.plot(time_history, force_history, linewidth=2)
-#         ax.set_title("Live Force")
-#         ax.set_ylabel("N")
-#         ax.set_xlabel("Time (s)")
-#         ax.grid(True)
-
-#         canvas.draw()
-
-#     except Exception as e:
-#         print("Graph error:", e)
-
-#     if running:
-#         update_graph_job = root.after(100, update_graph)
-
-# =====================================================
-# SAFE STOP FUNCTION
-# =====================================================
-
-# def safe_stop():
-#     global running, update_graph_job
-
-#     print("SAFE STOP ACTIVATED")
-
-#     running = False
-
-#     try:
-#         if update_graph_job:
-#             root.after_cancel(update_graph_job)
-#     except:
-#         pass
-
-#     try:
-#         Testing_functions.stop_test()
-#     except:
-#         pass
-
-#     try:
-#         Testing_functions.emergency_stop()
-#     except:
-#         pass
 
 
 # =====================================================
@@ -593,7 +463,7 @@ def prompt_and_start_test(test_type):
     material_var = tk.StringVar()
     counter_var = tk.StringVar()
     resistance_var = tk.StringVar(value="1M")
-    mode_var = tk.StringVar(value="VOLTAGE")
+    mode_var = tk.StringVar(value="DUAL")
 
     # -----------------------------
     # LAYOUT
@@ -612,8 +482,8 @@ def prompt_and_start_test(test_type):
     # Load resistance dropdown
     tk.Label(frame, text="Load Resistance").pack(anchor="w")
     resistance_options = [
-        "10k", "100k", "549k", "1M", "5.1M",
-        "10M", "50M", "100M", "1G"
+        "short", "10k", "100k", "549k", "1M", "5.1M",
+        "10M", "50M", "100M", "1G", "open"
     ]
     tk.OptionMenu(frame, resistance_var, *resistance_options).pack(fill="x", pady=5)
 
@@ -625,14 +495,27 @@ def prompt_and_start_test(test_type):
     # HELPER: convert resistance to Ohms
     # -----------------------------
     def parse_resistance(r_str):
+        s = str(r_str).strip().lower()
+        # special keywords
+        if s in ("short", "0", "short-circuit"):
+            return 0.0
+        if s in ("open", "inf", "infinity", "infinite"):
+            return float("inf")
+
         multipliers = {
             "k": 1e3,
-            "M": 1e6,
-            "G": 1e9
+            "m": 1e6,
+            "g": 1e9
         }
-        if r_str[-1] in multipliers:
-            return float(r_str[:-1]) * multipliers[r_str[-1]]
-        return float(r_str)
+        if len(s) > 1 and s[-1] in multipliers:
+            try:
+                return float(s[:-1]) * multipliers[s[-1]]
+            except ValueError:
+                raise ValueError(f"Invalid resistance value: {r_str}")
+        try:
+            return float(s)
+        except ValueError:
+            raise ValueError(f"Invalid resistance value: {r_str}")
 
     # -----------------------------
     # START BUTTON
@@ -687,7 +570,7 @@ def prompt_and_start_full_force_range():
     material_var = tk.StringVar()
     counter_var = tk.StringVar()
     resistance_var = tk.StringVar(value="1M")
-    mode_var = tk.StringVar(value="VOLTAGE")
+    mode_var = tk.StringVar(value="DUAL")
 
     # -----------------------------
     # LAYOUT
@@ -706,8 +589,8 @@ def prompt_and_start_full_force_range():
     # Load resistance dropdown
     tk.Label(frame, text="Load Resistance").pack(anchor="w")
     resistance_options = [
-        "10k", "100k", "549k", "1M", "5.1M",
-        "10M", "50M", "100M", "1G"
+        "short", "10k", "100k", "549k", "1M", "5.1M",
+        "10M", "50M", "100M", "1G", "open"
     ]
     tk.OptionMenu(frame, resistance_var, *resistance_options).pack(fill="x", pady=5)
 
@@ -719,14 +602,27 @@ def prompt_and_start_full_force_range():
     # HELPER: convert resistance to Ohms
     # -----------------------------
     def parse_resistance(r_str):
+        s = str(r_str).strip().lower()
+        # special keywords
+        if s in ("short", "0", "short-circuit"):
+            return 0.0
+        if s in ("open", "inf", "infinity", "infinite"):
+            return float("inf")
+
         multipliers = {
             "k": 1e3,
-            "M": 1e6,
-            "G": 1e9
+            "m": 1e6,
+            "g": 1e9
         }
-        if r_str[-1] in multipliers:
-            return float(r_str[:-1]) * multipliers[r_str[-1]]
-        return float(r_str)
+        if len(s) > 1 and s[-1] in multipliers:
+            try:
+                return float(s[:-1]) * multipliers[s[-1]]
+            except ValueError:
+                raise ValueError(f"Invalid resistance value: {r_str}")
+        try:
+            return float(s)
+        except ValueError:
+            raise ValueError(f"Invalid resistance value: {r_str}")
 
     # -----------------------------
     # START BUTTON
@@ -773,7 +669,7 @@ def prompt_and_start_impedance_test():
 
     material_var = tk.StringVar()
     counter_var = tk.StringVar()
-    mode_var = tk.StringVar(value="VOLTAGE")
+    mode_var = tk.StringVar(value="DUAL")
 
     frame = tk.Frame(dialog, padx=10, pady=10)
     frame.pack(fill="both", expand=True)
