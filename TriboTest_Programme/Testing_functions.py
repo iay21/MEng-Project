@@ -41,7 +41,7 @@ contact_time = 0.5 # s
 separation_time = 0.5 # s
 separation_height = 3 # mm
 
-no_contact_cycles = 150
+no_contact_cycles = 200
 no_slide_cycles = 2
 
 range_of_forces = [5, 10, 15, 20, 25, 30]
