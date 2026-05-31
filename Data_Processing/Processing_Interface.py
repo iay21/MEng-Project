@@ -100,10 +100,55 @@ def compare_force_control_methods_simple_gui():
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
-def voltage_convergence():
+def compare_force_offset_methods_gui():
 
     folder_path = filedialog.askdirectory(
-        title="Select folder containing voltage convergence CSV files"
+        title="Select force-control master folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+        Processing_functions.compare_force_offset_methods(folder_path)
+
+        messagebox.showinfo(
+            "Success",
+            "Force-control method comparison complete!"
+        )
+
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+def analyse_force_offset_repeatability_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select force-offset repeatability folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+        Processing_functions.analyse_force_offset_repeatability(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Force offset repeatability analysis complete!"
+        )
+
+    except Exception as e:
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+def analyse_voltage_convergence_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select convergence analysis folder"
     )
 
     if not folder_path:
@@ -111,7 +156,7 @@ def voltage_convergence():
 
     try:
 
-        Processing_functions.analyse_voltage_cycle_convergence(
+        Processing_functions.analyse_voltage_cycle_convergence_folder(
             folder_path
         )
 
@@ -133,7 +178,7 @@ def analyse_impedance():
         title="Select folder containing impedance CSV files"
     )
 
-    if not folder_path:
+    if not folder_path:\
         return
 
     try:
@@ -145,6 +190,117 @@ def analyse_impedance():
         messagebox.showinfo(
             "Success",
             "Impedance analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+def analyse_voc_force_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select VOC force-characterisation folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.analyse_voc_force_folder(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "VOC force analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+
+def analyse_isc_force_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select ISC force-characterisation folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.analyse_isc_force_folder(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "ISC force analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+
+def analyse_matched_voltage_force_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select matched-load voltage folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.analyse_matched_voltage_force_folder(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Matched-load voltage analysis complete!"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+
+
+def analyse_matched_current_force_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select matched-load current folder"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+
+        Processing_functions.analyse_matched_current_force_folder(
+            folder_path
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Matched-load current analysis complete!"
         )
 
     except Exception as e:
@@ -189,7 +345,7 @@ def plot_force_voltage():
 # =========================
 root = tk.Tk()
 root.title("Triboelectric Data Processor")
-root.geometry("700x420")
+root.geometry("720x450")
 
 main_frame = tk.Frame(root, padx=10, pady=10)
 main_frame.pack(fill="both", expand=True)
@@ -229,6 +385,38 @@ tk.Button(
     command=analyse_impedance
 ).grid(row=1, column=0, pady=5, sticky="ew")
 
+tk.Button(
+    teng_frame,
+    text="VOC vs Force",
+    width=30,
+    height=2,
+    command=analyse_voc_force_gui
+).grid(row=2, column=0, pady=5, sticky="ew")
+
+tk.Button(
+    teng_frame,
+    text="ISC vs Force",
+    width=30,
+    height=2,
+    command=analyse_isc_force_gui
+).grid(row=3, column=0, pady=5, sticky="ew")
+
+tk.Button(
+    teng_frame,
+    text="Impedance Matched Voltage vs Force",
+    width=30,
+    height=2,
+    command=analyse_matched_voltage_force_gui
+).grid(row=4, column=0, pady=5, sticky="ew")
+
+tk.Button(
+    teng_frame,
+    text="Impedance Matched Current vs Force",
+    width=30,
+    height=2,
+    command=analyse_matched_current_force_gui
+).grid(row=5, column=0, pady=5, sticky="ew")
+
 # Buttons for Rig Validation
 
 tk.Button(
@@ -257,7 +445,7 @@ tk.Button(
 
 tk.Button(
     rig_frame,
-    text="3b - Compare Force-Control Methods SIMPLE",
+    text="3b - Compare Force-Control Methods",
     width=30,
     height=2,
     command=compare_force_control_methods_simple_gui
@@ -265,10 +453,26 @@ tk.Button(
 
 tk.Button(
     rig_frame,
+    text="3c - Compare Force-Offset Methods",
+    width=30,   
+    height=2,
+    command=compare_force_offset_methods_gui
+).grid(row=4, column=0, pady=5, sticky="ew")
+
+tk.Button(
+    rig_frame,
+    text="3d - Analyse Force-Offset Repeatability",
+    width=30,
+    height=2,
+    command=analyse_force_offset_repeatability_gui
+).grid(row=5, column=0, pady=5, sticky="ew")
+
+tk.Button(
+    rig_frame,
     text="4 - Analyse Voltage Convergence",
     width=30,
     height=2,
-    command=voltage_convergence
-).grid(row=4, column=0, pady=5, sticky="ew")
+    command=analyse_voltage_convergence_gui
+).grid(row=6, column=0, pady=5, sticky="ew")
 
 root.mainloop()
