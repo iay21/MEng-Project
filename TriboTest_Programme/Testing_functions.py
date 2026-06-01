@@ -248,50 +248,6 @@ def current_output_voltage_to_current_A(v):
         return None
     return v / (CURRENT_SHUNT_OHM * INA_GAIN)
 
-# def init_keithley(resource_string=None):
-#     global rm, keithley
-
-#     rm = pyvisa.ResourceManager()
-
-#     resources = rm.list_resources()
-#     print("Available VISA resources:", resources)
-
-#     if not resources:
-#         raise RuntimeError("No VISA instruments found")
-
-#     # PICK ONLY INSTRUMENTS (filter out noise)
-#     candidates = [r for r in resources if "GPIB" in r or "USB" in r or "ASRL" in r]
-
-#     if not candidates:
-#         raise RuntimeError("No valid Keithley resource found")
-
-#     if resource_string is None:
-#         resource_string = candidates[0].strip()
-
-#     print("Opening:", repr(resource_string))
-
-#     keithley = rm.open_resource(resource_string)
-
-#     keithley.timeout = 5000
-#     keithley.read_termination = "\n"
-#     keithley.write_termination = "\n"
-
-#     print(keithley.query("*IDN?"))
-
-    
-#     keithley.write("reset()")
-#     # keithley.write("clear()")
-
-#     # IMPORTANT: explicitly enable DC voltage mode
-#     keithley.write("dmm.measure.func = dmm.FUNC_DC_VOLTAGE")
-#     keithley.write("dmm.measure.autorange = dmm.ON")
-
-# def read_voltage():
-#     try:
-#         return float(keithley.query("print(dmm.measure.read())"))
-#     except Exception as e:
-#         print("Keithley read error:", e)
-#         return None
 
 def initialise_rig():
     global loadcell, printer
@@ -538,6 +494,47 @@ def sliding_cycle():
 # Logging Control
 # -----------------------------------------------------------------------------
 
+
+def get_measurement_folder(measurement_mode):
+    mode = str(measurement_mode).upper()
+
+    if mode == "VOLTAGE":
+        return "Voltage"
+    elif mode == "CURRENT":
+        return "Current"
+    elif mode == "DUAL":
+        return "Dual"
+    else:
+        return "Unknown"
+
+
+def get_test_save_folder(test_category, measurement_mode=None):
+    """
+    Returns standard folder structure for test data.
+    """
+
+    if test_category is None:
+        return None
+
+    test_category = str(test_category).strip()
+
+    folder_map = {
+        "impedance": os.path.join("Impedance", get_measurement_folder(measurement_mode)),
+
+        "voc": os.path.join("Force_Characterisation", "VOC"),
+        "isc": os.path.join("Force_Characterisation", "ISC"),
+        "matched_voltage": os.path.join("Force_Characterisation", "Matched_Voltage"),
+        "matched_current": os.path.join("Force_Characterisation", "Matched_Current"),
+
+        "z_calibration": os.path.join("Rig_Validation", "Z_Calibration"),
+        "force_offset": os.path.join("Rig_Validation", "Force_Offset"),
+        "frequency": os.path.join("Rig_Validation", "Frequency"),
+        "convergence": os.path.join("Rig_Validation", "Convergence"),
+    }
+
+    return folder_map.get(test_category.lower(), test_category)
+
+
 def start_test(test_name, material, counter_material, load_resistance, selected_measurement_mode, contact_force, extra_folder=None):
     """
     Start a new test session and create a CSV log file.
@@ -557,7 +554,18 @@ def start_test(test_name, material, counter_material, load_resistance, selected_
         material_dir = os.path.join(SAVE_DIR, material)
 
         if extra_folder is not None:
-            material_dir = os.path.join(material_dir, extra_folder)
+            mapped_folder = get_test_save_folder(
+                extra_folder,
+                measurement_mode
+            )
+
+            material_dir = os.path.join(
+                material_dir,
+                mapped_folder
+            )
+
+        os.makedirs(material_dir, exist_ok=True)
+        
 
         os.makedirs(material_dir, exist_ok=True)
 
@@ -667,20 +675,51 @@ def stop_test():
 # Test Protocols
 # -----------------------------------------------------------------------------
 
-def run_contact_full_force_range(material, counter_material, load_resistance, measurement_mode):
-    ''' runs tests for full range of forces in the contact mode'''
+def run_contact_full_force_range(
+    material,
+    counter_material,
+    load_resistance,
+    measurement_mode,
+    test_category=None
+):
+    """
+    Runs contact tests across all forces.
+
+    test_category options:
+        voc
+        isc
+        matched_voltage
+        matched_current
+        convergence
+    """
+
     global contact_force
+
     for f in range_of_forces:
+
         contact_force = f
+
         print(f"Running contact test for target force {contact_force}N")
-        calibrate_z()  # determines z coords for neutral, contact and separation
-        send_gcode("M400")  # waits for printer to finish moving
-        start_test('contact', material, counter_material, load_resistance, measurement_mode, contact_force)
-        send_gcode("M400")  # waits for printer to finish moving
+
+        calibrate_z()
+        send_gcode("M400")
+
+        start_test(
+            "contact",
+            material,
+            counter_material,
+            load_resistance,
+            measurement_mode,
+            contact_force,
+            extra_folder=test_category
+        )
+
+        send_gcode("M400")
 
     reset()
-    send_gcode("M400")  # waits for printer to finish moving
+    send_gcode("M400")
 
+    
 def run_z_calibration_test():
     global contact_force, z_cal_test
     original_force = contact_force  # Save original value
@@ -698,8 +737,11 @@ def run_z_calibration_test():
 def run_single_impedance_test(material, counter_material, load_resistance, measurement_mode, resistance_label):
     """
     Runs one impedance test at 10N only.
+
     Saves into:
-    SAVE_DIR/material/impedance
+    SAVE_DIR/material/Impedance/Voltage
+    SAVE_DIR/material/Impedance/Current
+    SAVE_DIR/material/Impedance/Dual
     """
     global contact_force
 

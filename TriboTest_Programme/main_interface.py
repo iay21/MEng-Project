@@ -926,8 +926,7 @@ def prompt_and_start_impedance_test():
     ).pack(pady=10, fill="x")
 
     dialog.bind("<Return>", lambda event: start())
-
-def prompt_and_start_fixed_load_force_test(title, load_resistance, required_mode):
+def prompt_and_start_fixed_load_force_test(title, load_resistance, required_mode, test_category):
 
     if Testing_functions.measurement_mode != required_mode:
         messagebox.showwarning(
@@ -979,12 +978,18 @@ def prompt_and_start_fixed_load_force_test(title, load_resistance, required_mode
                 material,
                 counter,
                 load_resistance,
-                Testing_functions.measurement_mode
+                Testing_functions.measurement_mode,
+                test_category=test_category
             ),
             daemon=True
         ).start()
 
-    tk.Button(frame, text=f"Start {title}", command=start, height=2).pack(fill="x", pady=10)
+    tk.Button(
+        frame,
+        text=f"Start {title}",
+        command=start,
+        height=2
+    ).pack(fill="x", pady=10)
 
 
 def prompt_and_start_voc_test():
@@ -992,7 +997,8 @@ def prompt_and_start_voc_test():
     prompt_and_start_fixed_load_force_test(
         title="VOC Force Test",
         load_resistance=float("inf"),
-        required_mode="VOLTAGE"
+        required_mode="VOLTAGE",
+        test_category="voc"
     )
 
 
@@ -1001,9 +1007,9 @@ def prompt_and_start_isc_test():
     prompt_and_start_fixed_load_force_test(
         title="ISC Force Test",
         load_resistance=0,
-        required_mode="CURRENT"
+        required_mode="CURRENT",
+        test_category="isc"
     )
-
 
 def prompt_and_start_matched_load_test():
 
@@ -1057,6 +1063,32 @@ def prompt_and_start_matched_load_test():
         resistance = parse_resistance(resistance_var.get())
 
         dialog.destroy()
+
+        if Testing_functions.measurement_mode == "VOLTAGE":
+            test_category = "matched_voltage"
+
+        elif Testing_functions.measurement_mode == "CURRENT":
+            test_category = "matched_current"
+
+        else:
+            messagebox.showerror(
+                "Error",
+                "Matched-load test should be run in VOLTAGE or CURRENT mode."
+            )
+            return
+
+        dialog.destroy()
+
+        threading.Thread(
+            target=lambda: Testing_functions.run_contact_full_force_range(
+                material,
+                counter,
+                resistance,
+                Testing_functions.measurement_mode,
+                test_category=test_category
+            ),
+            daemon=True
+        ).start()
 
         threading.Thread(
             target=lambda: Testing_functions.run_contact_full_force_range(
