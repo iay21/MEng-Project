@@ -116,7 +116,7 @@ current_log_file = None
 csv_lock = threading.Lock()
 
 load_resistance = 1e6   # Ohms (example default)
-measurement_mode = "DUAL"   # or "CURRENT" or "DUAL"
+measurement_mode = "VOLTAGE"   # or "CURRENT" or "DUAL"
 counter_material = "UNKNOWN"
 z_cal_test = "DEFAULT"  # Test name/material for z calibration
 
@@ -145,17 +145,24 @@ def setup_keithley(inst, label):
     inst.write("dmm.measure.func = dmm.FUNC_DC_VOLTAGE")
     inst.write("dmm.measure.autorange = dmm.ON")
 
-
 def init_keithleys():
     global rm, keithley_voltage, keithley_current
+    global measurement_mode
 
     rm = pyvisa.ResourceManager()
 
-    keithley_voltage = rm.open_resource(VOLTAGE_KEITHLEY_RESOURCE)
-    setup_keithley(keithley_voltage, "Voltage Keithley")
+    keithley_voltage = None
+    keithley_current = None
 
-    keithley_current = rm.open_resource(CURRENT_KEITHLEY_RESOURCE)
-    setup_keithley(keithley_current, "Current Keithley")
+    if measurement_mode in ["VOLTAGE", "DUAL"]:
+        keithley_voltage = rm.open_resource(VOLTAGE_KEITHLEY_RESOURCE)
+        setup_keithley(keithley_voltage, "Voltage Keithley")
+
+    if measurement_mode in ["CURRENT", "DUAL"]:
+        keithley_current = rm.open_resource(CURRENT_KEITHLEY_RESOURCE)
+        setup_keithley(keithley_current, "Current Keithley")
+
+    print(f"Keithley setup complete. Mode = {measurement_mode}")
 
 CURRENT_SHUNT_OHM = 50
 INA_GAIN = 1
@@ -189,6 +196,32 @@ def cleanup_keithleys():
     except Exception as e:
         print(f"Error closing VISA resource manager: {e}")
 
+def set_measurement_mode(new_mode, voltage_resource=None, current_resource=None):
+    """
+    Change acquisition mode during a GUI session.
+    Allows one Keithley to be reassigned between voltage and current tests.
+    """
+
+    global measurement_mode
+    global VOLTAGE_KEITHLEY_RESOURCE, CURRENT_KEITHLEY_RESOURCE
+    global keithley_voltage, keithley_current
+
+    if current_log_file is not None:
+        raise RuntimeError("Cannot change measurement mode while a test is running.")
+
+    cleanup_keithleys()
+
+    measurement_mode = new_mode.upper()
+
+    if voltage_resource is not None:
+        VOLTAGE_KEITHLEY_RESOURCE = voltage_resource
+
+    if current_resource is not None:
+        CURRENT_KEITHLEY_RESOURCE = current_resource
+
+    init_keithleys()
+
+    print(f"Measurement mode changed to {measurement_mode}")
 
 def read_voltage():
     if keithley_voltage is None:
@@ -514,7 +547,7 @@ def start_test(test_name, material, counter_material, load_resistance, selected_
     
     global current_log_file, csv_writer, SAVE_DIR, measurement_mode
     
-    measurement_mode = selected_measurement_mode.upper()
+
     with csv_lock:
         if current_log_file is not None:
             print("⚠ A test is already running! Stop it first.")
@@ -631,28 +664,8 @@ def stop_test():
         csv_writer = None
 
 # -----------------------------------------------------------------------------
-# Full Test Protocol
+# Test Protocols
 # -----------------------------------------------------------------------------
-
-# def run_test_protocol(material):
-#     ''' runs whole protocol for both'''
-#     setup() # calibrates x, y, z coords and moves to "home"
-#     send_gcode("M400") # waits for printer to finish moving
-#     calibrate_z() # determines z coords for neutral, contact and separation
-#     send_gcode("M400") # waits for printer to finish moving
-
-#     for i in range(number_of_contact_tests):
-#         start_test('contact', material)
-#         z_go_to(85)
-#         send_gcode("M400") # waits for printer to finish moving
-    
-#     for i in range(number_of_slide_tests):
-#         start_test('slide', material)
-#         z_go_to(85)
-#         send_gcode("M400") # waits for printer to finish moving
-    
-#     reset()
-#     send_gcode("M400") # waits for printer to finish moving
 
 def run_contact_full_force_range(material, counter_material, load_resistance, measurement_mode):
     ''' runs tests for full range of forces in the contact mode'''
@@ -667,6 +680,20 @@ def run_contact_full_force_range(material, counter_material, load_resistance, me
 
     reset()
     send_gcode("M400")  # waits for printer to finish moving
+
+def run_z_calibration_test():
+    global contact_force, z_cal_test
+    original_force = contact_force  # Save original value
+    
+    for f in range_of_forces:
+        contact_force = f
+        print(f"Running z calibration for target force {contact_force}N")
+        start_test('z-calibration', z_cal_test, "NA", load_resistance, measurement_mode, contact_force) 
+        send_gcode("M400")  # Wait for calibration to complete
+        time.sleep(2)
+    
+    contact_force = original_force  # Restore original value
+
 
 def run_single_impedance_test(material, counter_material, load_resistance, measurement_mode, resistance_label):
     """
@@ -713,19 +740,49 @@ def run_slide_protocol(material):
     reset()
     send_gcode("M400") # waits for printer to finish moving
 
-def run_z_calibration_test():
-    global contact_force, z_cal_test
-    original_force = contact_force  # Save original value
-    
-    for f in range_of_forces:
-        contact_force = f
-        print(f"Running z calibration for target force {contact_force}N")
-        start_test('z-calibration', z_cal_test, "NA", load_resistance, measurement_mode, contact_force) 
-        send_gcode("M400")  # Wait for calibration to complete
-        time.sleep(2)
-    
-    contact_force = original_force  # Restore original value
 
+def run_voc_force_test(material, counter_material):
+    """
+    Open-circuit voltage test across all forces.
+    Physically connect open circuit / infinite load.
+    """
+    run_contact_full_force_range(
+        material=material,
+        counter_material=counter_material,
+        load_resistance=np.inf,
+        measurement_mode="VOLTAGE"
+    )
+
+
+def run_isc_force_test(material, counter_material):
+    """
+    Short-circuit current test across all forces.
+    Physically connect short circuit / 0 ohm load.
+    """
+    run_contact_full_force_range(
+        material=material,
+        counter_material=counter_material,
+        load_resistance=0,
+        measurement_mode="CURRENT"
+    )
+
+
+def run_impedance_matched_force_test(
+    material,
+    counter_material,
+    matched_resistance,
+    measurement_mode
+):
+    """
+    Matched-load voltage or current test across all forces.
+    matched_resistance should come from prior impedance analysis.
+    """
+    run_contact_full_force_range(
+        material=material,
+        counter_material=counter_material,
+        load_resistance=matched_resistance,
+        measurement_mode=measurement_mode
+    )
 
 # ---------------- BACKGROUND ----------------
 

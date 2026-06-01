@@ -23,11 +23,134 @@ root.title("Triboelectric Test Rig Controller")
 root.geometry("1450x820")
 root.minsize(1200, 700)
 
-# Start hardware in background
-threading.Thread(
-    target=Testing_functions.initialise_rig,
-    daemon=True
-).start()
+
+def rebuild_live_plot():
+    global fig, canvas, ax_force, ax_voltage, ax_current
+
+    for widget in graph_frame.winfo_children():
+        widget.destroy()
+
+    axes_needed = ["force"]
+
+    if Testing_functions.measurement_mode in ["VOLTAGE", "DUAL"]:
+        axes_needed.append("voltage")
+
+    if Testing_functions.measurement_mode in ["CURRENT", "DUAL"]:
+        axes_needed.append("current")
+
+    fig, axes = plt.subplots(
+        len(axes_needed),
+        1,
+        figsize=(8, 6),
+        dpi=100,
+        sharex=True
+    )
+
+    if len(axes_needed) == 1:
+        axes = [axes]
+
+    ax_force = axes[0]
+    ax_voltage = None
+    ax_current = None
+
+    axis_index = 1
+
+    if "voltage" in axes_needed:
+        ax_voltage = axes[axis_index]
+        axis_index += 1
+
+    if "current" in axes_needed:
+        ax_current = axes[axis_index]
+
+    graph_frame.config(
+        text=f"Live Data — {Testing_functions.measurement_mode} mode"
+    )
+
+    fig.tight_layout()
+
+    canvas = FigureCanvasTkAgg(fig, master=graph_frame)
+    canvas.get_tk_widget().pack(fill="both", expand=True)
+
+
+
+def startup_measurement_popup():
+    dialog = tk.Toplevel(root)
+    dialog.title("Measurement Mode Setup")
+    dialog.geometry("520x320")
+    dialog.transient(root)
+    dialog.grab_set()
+    dialog.lift()
+    dialog.focus_force()
+
+    mode_var = tk.StringVar(value="VOLTAGE")
+    voltage_resource_var = tk.StringVar(
+        value=Testing_functions.VOLTAGE_KEITHLEY_RESOURCE
+    )
+    current_resource_var = tk.StringVar(
+        value=Testing_functions.CURRENT_KEITHLEY_RESOURCE
+    )
+
+    frame = tk.Frame(dialog, padx=15, pady=15)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(
+        frame,
+        text="Select acquisition mode",
+        font=("Segoe UI", 12, "bold")
+    ).pack(anchor="w", pady=(0, 8))
+
+    tk.OptionMenu(
+        frame,
+        mode_var,
+        "FORCE",
+        "VOLTAGE",
+        "CURRENT",
+        "DUAL"
+    ).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Voltage Keithley VISA resource").pack(anchor="w")
+    tk.Entry(frame, textvariable=voltage_resource_var).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Current Keithley VISA resource").pack(anchor="w")
+    tk.Entry(frame, textvariable=current_resource_var).pack(fill="x", pady=5)
+
+    tk.Label(
+        frame,
+        text="For one Keithley, choose VOLTAGE or CURRENT and put the connected Keithley resource in that box.",
+        wraplength=470
+    ).pack(anchor="w", pady=8)
+
+    def start():
+        mode = mode_var.get().upper()
+
+        Testing_functions.measurement_mode = mode
+        Testing_functions.VOLTAGE_KEITHLEY_RESOURCE = voltage_resource_var.get().strip()
+        Testing_functions.CURRENT_KEITHLEY_RESOURCE = current_resource_var.get().strip()
+
+        dialog.destroy()
+
+        threading.Thread(
+            target=Testing_functions.initialise_rig,
+            daemon=True
+        ).start()
+
+        rebuild_live_plot()
+
+    tk.Button(
+        frame,
+        text="Start Rig",
+        command=start,
+        height=2
+    ).pack(fill="x", pady=10)
+
+    root.wait_window(dialog)
+
+
+# # Start hardware in background
+# threading.Thread(
+#     target=Testing_functions.initialise_rig,
+#     daemon=True
+# ).start()
 
 running = True
 
@@ -102,22 +225,12 @@ graph_frame = tk.LabelFrame(
 graph_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
 
-fig, (ax_force, ax_voltage, ax_current) = plt.subplots(
-    3, 1,
-    figsize=(8, 6),
-    dpi=100,
-    sharex=True
-)
+fig = None
+canvas = None
+ax_force = None
+ax_voltage = None
+ax_current = None
 
-fig.tight_layout()
-
-# fig, ax1 = plt.subplots(figsize=(8, 4), dpi=100)
-# fig.tight_layout()
-
-# ax2 = ax1.twinx()  # second y-axis
-
-canvas = FigureCanvasTkAgg(fig, master=graph_frame)
-canvas.get_tk_widget().pack(fill="both", expand=True)
 
 force_history = deque(maxlen=500)
 voltage_history = deque(maxlen=500)
@@ -186,11 +299,15 @@ def update_graph():
         ):
             root.after(100, update_graph)
             return
-
-
+        
         ax_force.cla()
-        ax_voltage.cla()
-        ax_current.cla()
+
+        if ax_voltage is not None:
+            ax_voltage.cla()
+
+        if ax_current is not None:
+            ax_current.cla()
+
 
         # -----------------------------
         # Prepare data
@@ -221,25 +338,27 @@ def update_graph():
         # -----------------------------
         # VOLTAGE
         # -----------------------------
-        ax_voltage.plot(t_v, v_vals, color="tab:blue")
-        ax_voltage.set_ylabel("Voltage (V)", color="tab:blue")
-        ax_voltage.tick_params(axis='y', labelcolor="tab:blue")
-        ax_voltage.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
-
+        if ax_voltage is not None:
+            ax_voltage.plot(t_v, v_vals, color="tab:blue")
+            ax_voltage.set_ylabel("Voltage (V)", color="tab:blue")
+            ax_voltage.tick_params(axis='y', labelcolor="tab:blue")
+            ax_voltage.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
         # -----------------------------
         # CURRENT
         # -----------------------------
-        ax_current.plot(t_i, i_vals, color="tab:green")
-        ax_current.set_ylabel("Current (uA)", color="tab:green")
-        ax_current.set_xlabel("Time (s)")
-        ax_current.tick_params(axis='y', labelcolor="tab:green")
-        ax_current.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+        if ax_current is not None:
+            ax_current.plot(t_i, i_vals, color="tab:green")
+            ax_current.set_ylabel("Current (µA)", color="tab:green")
+            ax_current.set_xlabel("Time (s)")
+            ax_current.tick_params(axis='y', labelcolor="tab:green")
+            ax_current.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
         # -----------------------------
         # X axis
         # -----------------------------
-        for ax in (ax_force, ax_voltage, ax_current):
-            ax.set_xlim(max(0, t - WINDOW), t)
+        for ax in [ax_force, ax_voltage, ax_current]:
+            if ax is not None:
+                ax.set_xlim(max(0, t - WINDOW), t)
 
         # -----------------------------
         # Y axis padding helper
@@ -260,8 +379,14 @@ def update_graph():
             )
 
         set_padded_ylim(ax_force, f_vals, -1, 11, 0.5)
-        set_padded_ylim(ax_voltage, v_vals, -5, 5, 0.1)
-        set_padded_ylim(ax_current, i_vals, -0.5, 0.5, 0.05)
+
+        if ax_voltage is not None:
+            set_padded_ylim(ax_voltage, v_vals, -5, 5, 0.1)
+
+        if ax_current is not None:
+            set_padded_ylim(ax_current, i_vals, -0.5, 0.5, 0.05)
+
+
 
         fig.tight_layout()
         canvas.draw_idle()
@@ -271,7 +396,7 @@ def update_graph():
 
     root.after(100, update_graph)
 
-
+startup_measurement_popup()
 # =====================================================
 # CONSOLE
 # =====================================================
@@ -445,6 +570,58 @@ buttons = [
     # ("SAFE LOG STOP", "Testing_functions.emergency_stop()")
 ]
 
+def change_measurement_mode_gui():
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Change Measurement Mode")
+    dialog.geometry("520x280")
+    dialog.transient(root)
+    dialog.grab_set()
+    dialog.lift()
+    dialog.focus_force()
+
+    mode_var = tk.StringVar(value=Testing_functions.measurement_mode)
+    voltage_resource_var = tk.StringVar(value=Testing_functions.VOLTAGE_KEITHLEY_RESOURCE)
+    current_resource_var = tk.StringVar(value=Testing_functions.CURRENT_KEITHLEY_RESOURCE)
+
+    frame = tk.Frame(dialog, padx=15, pady=15)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text="Measurement Mode").pack(anchor="w")
+    tk.OptionMenu(frame, mode_var, "FORCE", "VOLTAGE", "CURRENT", "DUAL").pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Voltage Keithley Resource").pack(anchor="w")
+    tk.Entry(frame, textvariable=voltage_resource_var).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Current Keithley Resource").pack(anchor="w")
+    tk.Entry(frame, textvariable=current_resource_var).pack(fill="x", pady=5)
+
+    def apply_change():
+        try:
+            Testing_functions.set_measurement_mode(
+                mode_var.get(),
+                voltage_resource_var.get().strip(),
+                current_resource_var.get().strip()
+            )
+
+            dialog.destroy()
+            rebuild_live_plot()
+
+            messagebox.showinfo(
+                "Mode Changed",
+                f"Measurement mode is now {Testing_functions.measurement_mode}"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    tk.Button(
+        frame,
+        text="Apply Mode Change",
+        command=apply_change,
+        height=2
+    ).pack(fill="x", pady=10)
+
 def prompt_and_start_test(test_type):
 
     dialog = tk.Toplevel(root)
@@ -463,7 +640,6 @@ def prompt_and_start_test(test_type):
     material_var = tk.StringVar()
     counter_var = tk.StringVar()
     resistance_var = tk.StringVar(value="1M")
-    mode_var = tk.StringVar(value="DUAL")
 
     # -----------------------------
     # LAYOUT
@@ -486,10 +662,6 @@ def prompt_and_start_test(test_type):
         "10M", "50M", "100M", "1G", "open"
     ]
     tk.OptionMenu(frame, resistance_var, *resistance_options).pack(fill="x", pady=5)
-
-    # Measurement mode dropdown
-    tk.Label(frame, text="Measurement Mode").pack(anchor="w")
-    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT", "DUAL").pack(fill="x", pady=5)
 
     # -----------------------------
     # HELPER: convert resistance to Ohms
@@ -524,13 +696,14 @@ def prompt_and_start_test(test_type):
         material = material_var.get().strip()
         counter = counter_var.get().strip()
 
+
         if not material or not counter:
             print("Test cancelled (missing material).")
             dialog.destroy()
             return
 
         resistance_ohm = parse_resistance(resistance_var.get())
-        mode = mode_var.get()
+        mode = Testing_functions.measurement_mode
 
         dialog.destroy()
 
@@ -570,7 +743,6 @@ def prompt_and_start_full_force_range():
     material_var = tk.StringVar()
     counter_var = tk.StringVar()
     resistance_var = tk.StringVar(value="1M")
-    mode_var = tk.StringVar(value="DUAL")
 
     # -----------------------------
     # LAYOUT
@@ -593,10 +765,6 @@ def prompt_and_start_full_force_range():
         "10M", "50M", "100M", "1G", "open"
     ]
     tk.OptionMenu(frame, resistance_var, *resistance_options).pack(fill="x", pady=5)
-
-    # Measurement mode dropdown
-    tk.Label(frame, text="Measurement Mode").pack(anchor="w")
-    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT", "DUAL").pack(fill="x", pady=5)
 
     # -----------------------------
     # HELPER: convert resistance to Ohms
@@ -637,7 +805,7 @@ def prompt_and_start_full_force_range():
             return
 
         resistance_ohm = parse_resistance(resistance_var.get())
-        mode = mode_var.get()
+        mode = Testing_functions.measurement_mode
 
         dialog.destroy()
 
@@ -669,8 +837,7 @@ def prompt_and_start_impedance_test():
 
     material_var = tk.StringVar()
     counter_var = tk.StringVar()
-    mode_var = tk.StringVar(value="DUAL")
-
+   
     frame = tk.Frame(dialog, padx=10, pady=10)
     frame.pack(fill="both", expand=True)
 
@@ -680,13 +847,11 @@ def prompt_and_start_impedance_test():
     tk.Label(frame, text="Counter Material").pack(anchor="w")
     tk.Entry(frame, textvariable=counter_var).pack(fill="x", pady=5)
 
-    tk.Label(frame, text="Measurement Mode").pack(anchor="w")
-    tk.OptionMenu(frame, mode_var, "VOLTAGE", "CURRENT", "DUAL").pack(fill="x", pady=5)
 
     def start():
         material = material_var.get().strip()
         counter = counter_var.get().strip()
-        mode = mode_var.get()
+        mode = Testing_functions.measurement_mode
 
         if not material or not counter:
             messagebox.showerror("Error", "Please enter both materials.")
@@ -762,31 +927,149 @@ def prompt_and_start_impedance_test():
 
     dialog.bind("<Return>", lambda event: start())
 
-# def prompt_and_start_test(test_type):
+def prompt_and_start_fixed_load_force_test(title, load_resistance, required_mode):
 
-#     material = simpledialog.askstring(
-#         "Material Name",
-#         f"Enter material name for {test_type} test:"
-#     )
+    if Testing_functions.measurement_mode != required_mode:
+        messagebox.showwarning(
+            "Wrong Mode",
+            f"{title} should be run in {required_mode} mode.\n"
+            f"Current mode is {Testing_functions.measurement_mode}.\n\n"
+            "Use Change Measurement Mode first."
+        )
+        return
 
-#     if not material:
-#         print("Test cancelled.")
-#         return
+    dialog = tk.Toplevel(root)
+    dialog.title(title)
+    dialog.geometry("350x220")
+    dialog.transient(root)
+    dialog.grab_set()
+    dialog.lift()
+    dialog.focus_force()
 
-#     threading.Thread(
-#         target=lambda: Testing_functions.start_test(test_type, material),
-#         daemon=True
-#     ).start()
+    material_var = tk.StringVar()
+    counter_var = tk.StringVar()
 
-for i, (txt, cmd) in enumerate(buttons):
+    frame = tk.Frame(dialog, padx=10, pady=10)
+    frame.pack(fill="both", expand=True)
 
-    tk.Button(
-        button_frame,
-        text=txt,
-        width=18,
-        height=2,
-        command=lambda c=cmd: run(c)
-    ).grid(row=i//2, column=i%2, padx=5, pady=5)
+    tk.Label(frame, text="Primary Material").pack(anchor="w")
+    tk.Entry(frame, textvariable=material_var).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Counter Material").pack(anchor="w")
+    tk.Entry(frame, textvariable=counter_var).pack(fill="x", pady=5)
+
+    tk.Label(
+        frame,
+        text=f"Mode: {Testing_functions.measurement_mode}",
+        font=("Segoe UI", 9, "italic")
+    ).pack(anchor="w", pady=5)
+
+    def start():
+        material = material_var.get().strip()
+        counter = counter_var.get().strip()
+
+        if not material or not counter:
+            messagebox.showerror("Error", "Please enter both materials.")
+            return
+
+        dialog.destroy()
+
+        threading.Thread(
+            target=lambda: Testing_functions.run_contact_full_force_range(
+                material,
+                counter,
+                load_resistance,
+                Testing_functions.measurement_mode
+            ),
+            daemon=True
+        ).start()
+
+    tk.Button(frame, text=f"Start {title}", command=start, height=2).pack(fill="x", pady=10)
+
+
+def prompt_and_start_voc_test():
+
+    prompt_and_start_fixed_load_force_test(
+        title="VOC Force Test",
+        load_resistance=float("inf"),
+        required_mode="VOLTAGE"
+    )
+
+
+def prompt_and_start_isc_test():
+
+    prompt_and_start_fixed_load_force_test(
+        title="ISC Force Test",
+        load_resistance=0,
+        required_mode="CURRENT"
+    )
+
+
+def prompt_and_start_matched_load_test():
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Matched Load Test Setup")
+    dialog.geometry("350x260")
+    dialog.transient(root)
+    dialog.grab_set()
+    dialog.lift()
+    dialog.focus_force()
+
+    material_var = tk.StringVar()
+    counter_var = tk.StringVar()
+    resistance_var = tk.StringVar(value="10M")
+
+    frame = tk.Frame(dialog, padx=10, pady=10)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text="Primary Material").pack(anchor="w")
+    tk.Entry(frame, textvariable=material_var).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Counter Material").pack(anchor="w")
+    tk.Entry(frame, textvariable=counter_var).pack(fill="x", pady=5)
+
+    tk.Label(frame, text="Matched Load Resistance").pack(anchor="w")
+    tk.Entry(frame, textvariable=resistance_var).pack(fill="x", pady=5)
+
+    tk.Label(
+        frame,
+        text=f"Current mode: {Testing_functions.measurement_mode}",
+        font=("Segoe UI", 9, "italic")
+    ).pack(anchor="w", pady=5)
+
+    def parse_resistance(r_str):
+        r_str = r_str.strip()
+        multipliers = {"k": 1e3, "M": 1e6, "G": 1e9}
+
+        if r_str[-1] in multipliers:
+            return float(r_str[:-1]) * multipliers[r_str[-1]]
+
+        return float(r_str)
+
+    def start():
+        material = material_var.get().strip()
+        counter = counter_var.get().strip()
+
+        if not material or not counter:
+            messagebox.showerror("Error", "Please enter both materials.")
+            return
+
+        resistance = parse_resistance(resistance_var.get())
+
+        dialog.destroy()
+
+        threading.Thread(
+            target=lambda: Testing_functions.run_contact_full_force_range(
+                material,
+                counter,
+                resistance,
+                Testing_functions.measurement_mode
+            ),
+            daemon=True
+        ).start()
+
+    tk.Button(frame, text="Start Matched-Load Test", command=start, height=2).pack(fill="x", pady=10)
+
 
 def prompt_and_start_z_calibration_test():
 
@@ -830,11 +1113,24 @@ def prompt_and_start_z_calibration_test():
     dialog.bind("<Return>", lambda event: start())
 
 
+
+for i, (txt, cmd) in enumerate(buttons):
+
+    tk.Button(
+        button_frame,
+        text=txt,
+        width=18,
+        height=2,
+        command=lambda c=cmd: run(c)
+    ).grid(row=i//2, column=i%2, padx=5, pady=5)
+
+
 extra_buttons = [
-    ("Run Contact Test", lambda: prompt_and_start_test("contact")),
-    ("Run Slide Test", lambda: prompt_and_start_test("slide")),
-    ("Run Full Force Range Test", lambda: prompt_and_start_full_force_range()),
+    ("Change Measurement Mode", lambda: change_measurement_mode_gui()),
     ("Run Impedance Test", lambda: prompt_and_start_impedance_test()),
+    ("Run VOC Force Test", lambda: prompt_and_start_voc_test()),
+    ("Run ISC Force Test", lambda: prompt_and_start_isc_test()),
+    ("Run Matched-Load Test", lambda: prompt_and_start_matched_load_test()),
     ("Run Z Calibration Test", lambda: prompt_and_start_z_calibration_test()),
 ]
 
