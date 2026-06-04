@@ -782,17 +782,18 @@ def run_slide_protocol(material):
     reset()
     send_gcode("M400") # waits for printer to finish moving
 
-
 def run_voc_force_test(material, counter_material):
     """
     Open-circuit voltage test across all forces.
     Physically connect open circuit / infinite load.
+    Saves into Force_Characterisation/VOC.
     """
     run_contact_full_force_range(
         material=material,
         counter_material=counter_material,
         load_resistance=np.inf,
-        measurement_mode="VOLTAGE"
+        measurement_mode="VOLTAGE",
+        test_category="voc"
     )
 
 
@@ -800,12 +801,14 @@ def run_isc_force_test(material, counter_material):
     """
     Short-circuit current test across all forces.
     Physically connect short circuit / 0 ohm load.
+    Saves into Force_Characterisation/ISC.
     """
     run_contact_full_force_range(
         material=material,
         counter_material=counter_material,
         load_resistance=0,
-        measurement_mode="CURRENT"
+        measurement_mode="CURRENT",
+        test_category="isc"
     )
 
 
@@ -817,15 +820,24 @@ def run_impedance_matched_force_test(
 ):
     """
     Matched-load voltage or current test across all forces.
-    matched_resistance should come from prior impedance analysis.
+    Saves into Force_Characterisation/Matched_Voltage or Matched_Current.
     """
+    mode = measurement_mode.upper()
+
+    if mode == "VOLTAGE":
+        test_category = "matched_voltage"
+    elif mode == "CURRENT":
+        test_category = "matched_current"
+    else:
+        raise ValueError("Matched-load test must be run in VOLTAGE or CURRENT mode.")
+
     run_contact_full_force_range(
         material=material,
         counter_material=counter_material,
         load_resistance=matched_resistance,
-        measurement_mode=measurement_mode
+        measurement_mode=mode,
+        test_category=test_category
     )
-
 # ---------------- BACKGROUND ----------------
 
 def arduino_loop():

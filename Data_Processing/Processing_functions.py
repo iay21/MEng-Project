@@ -18,77 +18,174 @@ contact_start_threshold = 0.5
 contact_end_threshold = 0.2
 
 
+# def load_data(file_path):
+#     """
+#     Loads old or new CSV files.
+
+#     Supported formats after metadata/header:
+#         time, force
+#         time, force, voltage
+#         time, force, voltage, current
+
+#     The current column is assumed to already be real current in amps.
+#     Rows are only dropped if time or force is missing; this prevents voltage-only
+#     or current-only files being emptied because the other channel is blank.
+#     """
+
+#     data_start = 0
+
+#     with open(file_path, "r") as f:
+#         for i, line in enumerate(f):
+#             line = line.strip()
+
+#             if not line:
+#                 continue
+
+#             if line.startswith("#"):
+#                 continue
+
+#             if "time" in line.lower():
+#                 continue
+
+#             data_start = i
+#             break
+
+#     df = pd.read_csv(
+#         file_path,
+#         sep=r"[\s,\t,]+",
+#         engine="python",
+#         skiprows=data_start,
+#         header=None
+#     )
+
+#     if df.shape[1] >= 4:
+#         df = df.iloc[:, :4]
+#         df.columns = ["time", "force", "voltage", "current"]
+
+#     elif df.shape[1] >= 3:
+#         df = df.iloc[:, :3]
+#         df.columns = ["time", "force", "voltage"]
+
+#     elif df.shape[1] >= 2:
+#         df = df.iloc[:, :2]
+#         df.columns = ["time", "force"]
+
+#     else:
+#         raise ValueError(f"Not enough columns in {file_path}")
+
+#     for col in df.columns:
+#         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+#     # Only require time and force.
+#     # Do NOT drop rows just because voltage/current is blank.
+#     df = df.dropna(subset=["time", "force"]).reset_index(drop=True)
+
+#     # Remove voltage column if it is completely empty
+#     if "voltage" in df.columns and df["voltage"].isna().all():
+#         df = df.drop(columns=["voltage"])
+
+#     # Remove current column if it is completely empty
+#     if "current" in df.columns and df["current"].isna().all():
+#         df = df.drop(columns=["current"])
+
+#     # Remove any out-of-order time glitches
+#     bad_rows = df.index[
+#         df["time"].shift(-1) < df["time"]
+#     ]
+
+#     df = df.drop(bad_rows).reset_index(drop=True)
+
+#     return df
+
 def load_data(file_path):
     """
     Loads old or new CSV files.
 
-    Supported formats after metadata/header:
-        time, force
-        time, force, voltage
+    Supports metadata at the top of the file, then a real CSV header such as:
+
+        time_s,force_N,voltage_V,current_A
+
+    Output columns are normalised to:
+
         time, force, voltage, current
 
-    The current column is assumed to already be real current in amps.
-    Rows are only dropped if time or force is missing; this prevents voltage-only
-    or current-only files being emptied because the other channel is blank.
+    Current is assumed to already be real current in amps.
     """
 
-    data_start = 0
+    header_row = None
 
-    with open(file_path, "r") as f:
+    # Find the actual data header row
+    with open(file_path, "r", errors="ignore") as f:
         for i, line in enumerate(f):
-            line = line.strip()
+            line_clean = line.strip().lower()
 
-            if not line:
+            if not line_clean:
                 continue
 
-            if line.startswith("#"):
+            if line_clean.startswith("#"):
                 continue
 
-            if "time" in line.lower():
-                continue
+            if "time" in line_clean and "force" in line_clean:
+                header_row = i
+                break
 
-            data_start = i
-            break
+    if header_row is None:
+        raise ValueError(f"Could not find data header row in {file_path}")
 
+    # Important: use normal comma CSV reading.
+    # Do NOT use a regex separator, because it collapses empty fields.
     df = pd.read_csv(
         file_path,
-        sep=r"[\s,\t,]+",
-        engine="python",
-        skiprows=data_start,
-        header=None
+        skiprows=header_row
     )
 
-    if df.shape[1] >= 4:
-        df = df.iloc[:, :4]
-        df.columns = ["time", "force", "voltage", "current"]
+    # Clean column names
+    df.columns = [
+        str(c).strip()
+        for c in df.columns
+    ]
 
-    elif df.shape[1] >= 3:
-        df = df.iloc[:, :3]
-        df.columns = ["time", "force", "voltage"]
+    # Rename new saved column names to analysis-friendly names
+    rename_map = {
+        "time_s": "time",
+        "force_N": "force",
+        "voltage_V": "voltage",
+        "current_A": "current",
 
-    elif df.shape[1] >= 2:
-        df = df.iloc[:, :2]
-        df.columns = ["time", "force"]
+        # Older possible names
+        "time": "time",
+        "force": "force",
+        "voltage": "voltage",
+        "current": "current",
+    }
 
-    else:
-        raise ValueError(f"Not enough columns in {file_path}")
+    df = df.rename(columns=rename_map)
+
+    # Keep only recognised columns
+    keep_cols = [
+        c for c in ["time", "force", "voltage", "current"]
+        if c in df.columns
+    ]
+
+    df = df[keep_cols].copy()
+
+    if "time" not in df.columns or "force" not in df.columns:
+        raise ValueError(f"File must contain time and force columns: {file_path}")
 
     for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Only require time and force.
-    # Do NOT drop rows just because voltage/current is blank.
+    # Only require time and force
     df = df.dropna(subset=["time", "force"]).reset_index(drop=True)
 
-    # Remove voltage column if it is completely empty
+    # Remove voltage/current only if completely empty
     if "voltage" in df.columns and df["voltage"].isna().all():
         df = df.drop(columns=["voltage"])
 
-    # Remove current column if it is completely empty
     if "current" in df.columns and df["current"].isna().all():
         df = df.drop(columns=["current"])
 
-    # Remove any out-of-order time glitches
+    # Remove out-of-order time glitches
     bad_rows = df.index[
         df["time"].shift(-1) < df["time"]
     ]

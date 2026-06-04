@@ -926,6 +926,8 @@ def prompt_and_start_impedance_test():
     ).pack(pady=10, fill="x")
 
     dialog.bind("<Return>", lambda event: start())
+
+
 def prompt_and_start_fixed_load_force_test(title, load_resistance, required_mode, test_category):
 
     if Testing_functions.measurement_mode != required_mode:
@@ -1011,6 +1013,8 @@ def prompt_and_start_isc_test():
         test_category="isc"
     )
 
+    
+
 def prompt_and_start_matched_load_test():
 
     dialog = tk.Toplevel(root)
@@ -1062,8 +1066,6 @@ def prompt_and_start_matched_load_test():
 
         resistance = parse_resistance(resistance_var.get())
 
-        dialog.destroy()
-
         if Testing_functions.measurement_mode == "VOLTAGE":
             test_category = "matched_voltage"
 
@@ -1090,15 +1092,6 @@ def prompt_and_start_matched_load_test():
             daemon=True
         ).start()
 
-        threading.Thread(
-            target=lambda: Testing_functions.run_contact_full_force_range(
-                material,
-                counter,
-                resistance,
-                Testing_functions.measurement_mode
-            ),
-            daemon=True
-        ).start()
 
     tk.Button(frame, text="Start Matched-Load Test", command=start, height=2).pack(fill="x", pady=10)
 
