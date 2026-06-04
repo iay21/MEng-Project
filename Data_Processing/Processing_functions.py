@@ -3501,425 +3501,6 @@ def plot_force_voltage_vs_time(file_path):
 
 # IMPEDANCE ANALYSIS
 
-def analyse_material_impedance(material_folder):
-    """
-    Analyse impedance data from:
-
-        material_folder/
-            Impedance/
-                Voltage/
-                    *.csv
-                Current/
-                    *.csv
-                Dual/
-                    *.csv   optional
-
-    Produces:
-        - IMPEDANCE_ANALYSIS.xlsx
-        - Impedance_Peak_Voltage_Current_Power.png
-        - Impedance_RMS_Voltage_Current_Power.png
-
-    Notes:
-        If voltage and current are measured separately, true instantaneous V*I
-        cannot be calculated because the signals were not simultaneous.
-        In that case, associated power is calculated by matching load resistance:
-            P_peak = Vpeak * Ipeak
-            P_rms = Vrms * Irms
-
-        If a dual file exists with voltage and current in the same CSV,
-        true cycle max instantaneous power max(|V*I|) is also calculated.
-    """
-
-    import os
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
-
-    impedance_folder = os.path.join(
-        material_folder,
-        "Impedance"
-    )
-
-    voltage_folder = os.path.join(
-        impedance_folder,
-        "Voltage"
-    )
-
-    current_folder = os.path.join(
-        impedance_folder,
-        "Current"
-    )
-
-    dual_folder = os.path.join(
-        impedance_folder,
-        "Dual"
-    )
-
-    output_folder = impedance_folder
-
-    os.makedirs(output_folder, exist_ok=True)
-
-    def resistance_label(R):
-
-        if pd.isna(R):
-            return "Unknown"
-
-        if R == 0:
-            return "SC"
-
-        if np.isinf(R):
-            return "OC"
-
-        if R >= 1e9:
-            return f"{R / 1e9:g}G"
-
-        if R >= 1e6:
-            return f"{R / 1e6:g}M"
-
-        if R >= 1e3:
-            return f"{R / 1e3:g}k"
-
-        return f"{R:g}"
-
-    def valid_impedance_R(R):
-        return pd.notna(R) and R > 0 and not np.isinf(R)
-
-    def collect_signal_folder(folder, signal_col):
-
-        rows = []
-
-        if not os.path.isdir(folder):
-            return pd.DataFrame(rows)
-
-        csv_files = sorted([
-            f for f in os.listdir(folder)
-            if (
-                f.endswith(".csv")
-                and "_analysis" not in f
-                and "_analysed" not in f
-            )
-        ])
-
-        for file in csv_files:
-
-            file_path = os.path.join(folder, file)
-
-            R = read_load_resistance(file_path)
-
-            if R is None:
-                print(f"Skipping {file}: no load resistance.")
-                continue
-
-            df = load_data(file_path)
-
-            if signal_col not in df.columns:
-                print(f"Skipping {file}: no {signal_col} data.")
-                continue
-
-            cycle_df, summary = calculate_cycle_peak_rms_metrics(
-                df,
-                signal_col=signal_col,
-                baseline_method="median"
-            )
-
-            rows.append({
-                "File": file,
-                "Load Resistance (Ohm)": R,
-                "Load Resistance Label": resistance_label(R),
-                f"Mean {signal_col} Peak": summary["mean_rectified_peak"],
-                f"STD {signal_col} Peak": summary["std_rectified_peak"],
-                f"Mean {signal_col} RMS": summary["mean_rms"],
-                f"STD {signal_col} RMS": summary["std_rms"],
-                f"{signal_col} Cycles Analysed": summary["n_cycles"]
-            })
-
-        return pd.DataFrame(rows)
-
-    def collect_dual_power(folder):
-
-        rows = []
-
-        if not os.path.isdir(folder):
-            return pd.DataFrame(rows)
-
-        csv_files = sorted([
-            f for f in os.listdir(folder)
-            if (
-                f.endswith(".csv")
-                and "_analysis" not in f
-                and "_analysed" not in f
-            )
-        ])
-
-        for file in csv_files:
-
-            file_path = os.path.join(folder, file)
-
-            R = read_load_resistance(file_path)
-
-            if R is None:
-                continue
-
-            df = load_data(file_path)
-
-            if "voltage" not in df.columns or "current" not in df.columns:
-                continue
-
-            df = df.copy()
-            df["instantaneous_power_W"] = df["voltage"] * df["current"]
-
-            cycles = find_cycles(df)
-
-            cycle_max_power = []
-
-            for start, end in cycles:
-
-                cycle = df.loc[start:end]
-
-                if len(cycle) < MIN_CYCLE_POINTS:
-                    continue
-
-                cycle_max_power.append(
-                    np.max(np.abs(cycle["instantaneous_power_W"]))
-                )
-
-            if len(cycle_max_power) == 0:
-                continue
-
-            rows.append({
-                "Load Resistance (Ohm)": R,
-                "Mean True Cycle Max Instantaneous Power (W)": np.mean(cycle_max_power),
-                "STD True Cycle Max Instantaneous Power (W)": (
-                    np.std(cycle_max_power, ddof=1)
-                    if len(cycle_max_power) > 1
-                    else np.nan
-                ),
-                "Instantaneous Power Cycles Analysed": len(cycle_max_power)
-            })
-
-        return pd.DataFrame(rows)
-
-    voltage_df = collect_signal_folder(
-        voltage_folder,
-        "voltage"
-    )
-
-    current_df = collect_signal_folder(
-        current_folder,
-        "current"
-    )
-
-    dual_power_df = collect_dual_power(
-        dual_folder
-    )
-
-    if len(voltage_df) == 0 and len(current_df) == 0:
-        raise ValueError("No valid impedance voltage or current data found.")
-
-    summary_df = pd.merge(
-        voltage_df,
-        current_df,
-        on=["Load Resistance (Ohm)", "Load Resistance Label"],
-        how="outer"
-    )
-
-    if len(dual_power_df) > 0:
-        summary_df = pd.merge(
-            summary_df,
-            dual_power_df,
-            on="Load Resistance (Ohm)",
-            how="left"
-        )
-
-    summary_df = summary_df.sort_values(
-        "Load Resistance (Ohm)"
-    ).reset_index(drop=True)
-
-    # Associated power from separately measured V/I
-    summary_df["Associated Peak Power Vpeak*Ipeak (W)"] = (
-        summary_df["Mean voltage Peak"]
-        *
-        summary_df["Mean current Peak"]
-    )
-
-    summary_df["Associated RMS Power Vrms*Irms (W)"] = (
-        summary_df["Mean voltage RMS"]
-        *
-        summary_df["Mean current RMS"]
-    )
-
-    valid_power_df = summary_df[
-        summary_df["Load Resistance (Ohm)"].apply(valid_impedance_R)
-        &
-        summary_df["Associated Peak Power Vpeak*Ipeak (W)"].notna()
-    ].copy()
-
-    if len(valid_power_df) > 0:
-
-        max_idx = valid_power_df[
-            "Associated Peak Power Vpeak*Ipeak (W)"
-        ].idxmax()
-
-        matched_R = summary_df.loc[
-            max_idx,
-            "Load Resistance (Ohm)"
-        ]
-
-        matched_label = summary_df.loc[
-            max_idx,
-            "Load Resistance Label"
-        ]
-
-    else:
-        matched_R = np.nan
-        matched_label = "Unknown"
-
-    summary_df["Impedance Matched Load?"] = (
-        summary_df["Load Resistance (Ohm)"] == matched_R
-    )
-
-    output_excel = os.path.join(
-        output_folder,
-        "IMPEDANCE_ANALYSIS.xlsx"
-    )
-
-    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
-        summary_df.to_excel(
-            writer,
-            sheet_name="SUMMARY",
-            index=False
-        )
-
-    def plot_impedance(
-        voltage_col,
-        current_col,
-        power_col,
-        title,
-        filename,
-        voltage_ylabel,
-        current_ylabel,
-        power_ylabel
-    ):
-
-        plot_df = summary_df[
-            summary_df["Load Resistance (Ohm)"].apply(valid_impedance_R)
-        ].copy()
-
-        if len(plot_df) == 0:
-            return None
-
-        fig, ax1 = plt.subplots(figsize=(9, 6))
-
-        lines = []
-
-        if voltage_col in plot_df.columns:
-            line1, = ax1.plot(
-                plot_df["Load Resistance (Ohm)"],
-                plot_df[voltage_col],
-                marker="o",
-                color=PLOT_COLOURS.get("voltage", "tab:blue"),
-                label=voltage_ylabel
-            )
-            lines.append(line1)
-
-        ax1.set_xscale("log")
-        ax1.set_xlabel("Load Resistance (Ohm)")
-        ax1.set_ylabel(voltage_ylabel)
-
-        ax2 = ax1.twinx()
-
-        if current_col in plot_df.columns:
-            line2, = ax2.plot(
-                plot_df["Load Resistance (Ohm)"],
-                plot_df[current_col] * 1e6,
-                marker="s",
-                color=PLOT_COLOURS.get("current", "tab:green"),
-                label=current_ylabel
-            )
-            lines.append(line2)
-
-        ax2.set_ylabel(current_ylabel)
-
-        ax3 = ax1.twinx()
-        ax3.spines["right"].set_position(("outward", 70))
-
-        if power_col in plot_df.columns:
-            line3, = ax3.plot(
-                plot_df["Load Resistance (Ohm)"],
-                plot_df[power_col],
-                marker="^",
-                linestyle=":",
-                color=PLOT_COLOURS.get("power", "tab:red"),
-                label=power_ylabel
-            )
-            lines.append(line3)
-
-        ax3.set_ylabel(power_ylabel)
-
-        if pd.notna(matched_R):
-            ax1.axvline(
-                matched_R,
-                linestyle="--",
-                color="black"
-            )
-
-            ax1.text(
-                matched_R,
-                ax1.get_ylim()[1] * 0.95,
-                f"Matched load:\n{matched_label}",
-                rotation=90,
-                va="top",
-                ha="right"
-            )
-
-        labels = [line.get_label() for line in lines]
-
-        ax1.legend(
-            lines,
-            labels,
-            loc="best"
-        )
-
-        plt.title(title)
-        plt.tight_layout()
-
-        plot_path = os.path.join(
-            output_folder,
-            filename
-        )
-
-        plt.savefig(plot_path, dpi=300)
-        plt.close()
-
-        return plot_path
-
-    peak_plot = plot_impedance(
-        voltage_col="Mean voltage Peak",
-        current_col="Mean current Peak",
-        power_col="Associated Peak Power Vpeak*Ipeak (W)",
-        title="Impedance Matching: Peak Voltage, Current and Power",
-        filename="Impedance_Peak_Voltage_Current_Power.png",
-        voltage_ylabel="Mean peak voltage (V)",
-        current_ylabel="Mean peak current (µA)",
-        power_ylabel="Associated peak power (W)"
-    )
-
-    rms_plot = plot_impedance(
-        voltage_col="Mean voltage RMS",
-        current_col="Mean current RMS",
-        power_col="Associated RMS Power Vrms*Irms (W)",
-        title="Impedance Matching: RMS Voltage, Current and Power",
-        filename="Impedance_RMS_Voltage_Current_Power.png",
-        voltage_ylabel="RMS voltage (V)",
-        current_ylabel="RMS current (µA)",
-        power_ylabel="Associated RMS power (W)"
-    )
-
-    print(f"Saved impedance analysis:\n{output_excel}")
-    print(f"Impedance matched load: {matched_label}")
-
-    return output_excel
-
 
 def analyse_material_impedance(material_folder):
     """
@@ -5374,7 +4955,493 @@ def compare_all_material_force_characterisation(
         }
     }
 
+def plot_material_voc_isc_peak_rms_errorbars(
+    material_folder,
+    run_material_analysis=False,
+    current_scale=1e9,
+    current_unit="nA"
+):
+    """
+    Plot peak and RMS force-response graphs with error bars for one material.
 
+    Creates:
+        1. VOC_peak_RMS_errorbars.png
+        2. ISC_peak_RMS_errorbars.png
+
+    Error bars show cycle-level standard deviation:
+        - STD Rectified Peak for peak values
+        - STD RMS for RMS values
+
+    Expected structure:
+        material_folder/
+            Force_Characterisation/
+                MATERIAL_FORCE_CHARACTERISATION_SUMMARY.xlsx
+    """
+
+    import os
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    material_name = os.path.basename(
+        os.path.normpath(material_folder)
+    )
+
+    force_folder = os.path.join(
+        material_folder,
+        "Force_Characterisation"
+    )
+
+    summary_excel = os.path.join(
+        force_folder,
+        "MATERIAL_FORCE_CHARACTERISATION_SUMMARY.xlsx"
+    )
+
+    # Optional: rerun material analysis first
+    if run_material_analysis or not os.path.exists(summary_excel):
+        summary_excel = analyse_material_force_characterisation(
+            material_folder
+        )
+
+    if not os.path.exists(summary_excel):
+        raise FileNotFoundError(
+            f"Could not find material summary:\n{summary_excel}"
+        )
+
+    summary_df = pd.read_excel(
+        summary_excel,
+        sheet_name="SUMMARY_ALL_TESTS"
+    )
+
+    summary_df["Test"] = summary_df["Test"].astype(str).str.strip()
+
+    def plot_peak_and_rms_for_test(
+        test_name,
+        ylabel,
+        title,
+        filename,
+        peak_label,
+        rms_label,
+        peak_colour,
+        rms_colour,
+        scale=1
+    ):
+        plot_df = summary_df[
+            summary_df["Test"] == test_name
+        ].copy()
+
+        if len(plot_df) == 0:
+            print(f"No {test_name} data found for {material_name}.")
+            return None
+
+        plot_df = plot_df.sort_values("Target Force (N)")
+
+        x = plot_df["Target Force (N)"]
+
+        peak_y = plot_df["Mean Rectified Peak"] * scale
+        peak_err = plot_df["STD Rectified Peak"] * scale
+
+        rms_y = plot_df["Mean RMS"] * scale
+        rms_err = plot_df["STD RMS"] * scale
+
+        plt.figure(figsize=(8, 6))
+
+        plt.errorbar(
+            x,
+            peak_y,
+            yerr=peak_err,
+            marker="o",
+            capsize=4,
+            linewidth=1.8,
+            elinewidth=1,
+            capthick=1,
+            color=peak_colour,
+            label=peak_label
+        )
+
+        plt.errorbar(
+            x,
+            rms_y,
+            yerr=rms_err,
+            marker="s",
+            capsize=4,
+            linewidth=1.8,
+            elinewidth=1,
+            capthick=1,
+            color=rms_colour,
+            label=rms_label
+        )
+
+        plt.xlabel("Target Force (N)")
+        plt.ylabel(ylabel)
+        plt.title(f"{material_name}: {title}")
+
+        plt.grid(
+            True,
+            linestyle="--",
+            alpha=0.4
+        )
+
+        plt.legend()
+        plt.tight_layout()
+
+        output_path = os.path.join(
+            force_folder,
+            filename
+        )
+
+        plt.savefig(
+            output_path,
+            dpi=300
+        )
+
+        plt.close()
+
+        return output_path
+
+    voc_plot = plot_peak_and_rms_for_test(
+        test_name="VOC",
+        ylabel="Voltage (V)",
+        title="VOC Peak and RMS vs Force",
+        filename="VOC_peak_RMS_errorbars.png",
+        peak_label="Mean rectified peak voltage",
+        rms_label="RMS voltage",
+        peak_colour=PLOT_COLOURS["voltage"],
+        rms_colour=PLOT_COLOURS["voltage_rms"],
+        scale=1
+    )
+
+    isc_plot = plot_peak_and_rms_for_test(
+        test_name="ISC",
+        ylabel=f"Current ({current_unit})",
+        title="ISC Peak and RMS vs Force",
+        filename="ISC_peak_RMS_errorbars.png",
+        peak_label="Mean rectified peak current",
+        rms_label="RMS current",
+        peak_colour=PLOT_COLOURS["current"],
+        rms_colour=PLOT_COLOURS["current_rms"],
+        scale=current_scale
+    )
+
+    print("\nSaved material peak/RMS error-bar plots:")
+    if voc_plot is not None:
+        print(voc_plot)
+    if isc_plot is not None:
+        print(isc_plot)
+
+    return {
+        "VOC": voc_plot,
+        "ISC": isc_plot
+    }
+
+def plot_best_signal_window(
+    file_path,
+    window_width_s=20,
+    step_s=2,
+    signal_col=None,
+    output_folder=None,
+    filename=None,
+    start_buffer_s=5,
+    end_buffer_s=5
+):
+    """
+    Automatically find a clean-looking window of force + electrical signal
+    and export a thesis-friendly plot.
+
+    The chosen window favours:
+        - regular repeated force cycles
+        - force reaching a stable repeated peak
+        - electrical signal with visible activity
+        - low baseline drift
+        - no very large single outlier dominating the window
+
+    Parameters
+    ----------
+    file_path : str
+        CSV file to analyse.
+
+    window_width_s : float
+        Width of the plotted window in seconds.
+
+    step_s : float
+        Step size used when scanning candidate windows.
+
+    signal_col : str or None
+        "voltage" or "current".
+        If None, the function chooses voltage if available, otherwise current.
+
+    output_folder : str or None
+        Folder where the plot is saved. Defaults to the CSV folder.
+
+    filename : str or None
+        Output image filename. Defaults to automatic name.
+
+    start_buffer_s : float
+        Ignore the first few seconds of the file.
+
+    end_buffer_s : float
+        Ignore the last few seconds of the file.
+
+    Returns
+    -------
+    dict
+        Information about the selected window and output path.
+    """
+
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    df = load_data(file_path)
+
+    if output_folder is None:
+        output_folder = os.path.dirname(file_path)
+
+    if signal_col is None:
+        if "voltage" in df.columns:
+            signal_col = "voltage"
+        elif "current" in df.columns:
+            signal_col = "current"
+        else:
+            raise ValueError("No voltage or current column found.")
+
+    if signal_col not in df.columns:
+        raise ValueError(f"Signal column '{signal_col}' not found.")
+
+    df = df[["time", "force", signal_col]].dropna().copy()
+
+    if len(df) == 0:
+        raise ValueError("No valid data found after dropping NaNs.")
+
+    time_min = df["time"].min() + start_buffer_s
+    time_max = df["time"].max() - end_buffer_s
+
+    if time_max - time_min < window_width_s:
+        raise ValueError("File is too short for selected window width.")
+
+    candidate_starts = np.arange(
+        time_min,
+        time_max - window_width_s,
+        step_s
+    )
+
+    if len(candidate_starts) == 0:
+        raise ValueError("No candidate windows found.")
+
+    def robust_range(x):
+        """
+        Robust signal range using percentiles rather than absolute max/min.
+        """
+        return np.nanpercentile(x, 95) - np.nanpercentile(x, 5)
+
+    def count_force_cycles(window_df):
+        """
+        Count cycles using the existing force thresholds.
+        """
+        cycles = find_cycles(window_df[["time", "force"]])
+        return len(cycles)
+
+    scores = []
+
+    for start_time in candidate_starts:
+
+        end_time = start_time + window_width_s
+
+        window_df = df[
+            (df["time"] >= start_time)
+            &
+            (df["time"] <= end_time)
+        ].copy()
+
+        if len(window_df) < 20:
+            continue
+
+        force = window_df["force"].to_numpy()
+        signal = window_df[signal_col].to_numpy()
+        time = window_df["time"].to_numpy()
+
+        force_range = robust_range(force)
+        signal_range = robust_range(signal)
+
+        if force_range <= 0 or signal_range <= 0:
+            continue
+
+        n_cycles = count_force_cycles(window_df)
+
+        # Aim for enough cycles to look useful, but not so many that it is visually dense.
+        # At 0.5 Hz, a 20 s window gives about 10 cycles.
+        expected_min_cycles = max(2, int(window_width_s * 0.25))
+        expected_max_cycles = max(4, int(window_width_s * 1.5))
+
+        if n_cycles < expected_min_cycles or n_cycles > expected_max_cycles:
+            cycle_score = 0
+        else:
+            cycle_score = 1
+
+        # Force regularity: compare peak force per detected cycle
+        cycles = find_cycles(window_df[["time", "force"]])
+        peak_forces = []
+
+        for start_idx, end_idx in cycles:
+            cycle_force = window_df.loc[start_idx:end_idx, "force"]
+
+            if len(cycle_force) > 0:
+                peak_forces.append(cycle_force.max())
+
+        if len(peak_forces) >= 2:
+            peak_forces = np.array(peak_forces)
+            force_cv = (
+                np.nanstd(peak_forces, ddof=1)
+                /
+                np.nanmean(peak_forces)
+                if np.nanmean(peak_forces) != 0
+                else np.inf
+            )
+        else:
+            force_cv = np.inf
+
+        force_regular_score = 1 / (1 + force_cv)
+
+        # Signal activity: prefer windows with visible signal range
+        signal_activity_score = np.log1p(abs(signal_range))
+
+        # Penalise drift in electrical signal
+        try:
+            signal_slope = abs(np.polyfit(time, signal, 1)[0])
+        except:
+            signal_slope = 0
+
+        drift_penalty = 1 / (1 + signal_slope / (abs(signal_range) + 1e-12))
+
+        # Penalise huge isolated outliers
+        signal_abs = np.abs(signal - np.nanmedian(signal))
+        p95 = np.nanpercentile(signal_abs, 95)
+        p50 = np.nanpercentile(signal_abs, 50)
+
+        outlier_ratio = p95 / (p50 + 1e-12)
+        outlier_penalty = 1 / (1 + max(0, outlier_ratio - 20))
+
+        total_score = (
+            3.0 * cycle_score
+            +
+            2.0 * force_regular_score
+            +
+            1.5 * signal_activity_score
+            +
+            1.0 * drift_penalty
+            +
+            1.0 * outlier_penalty
+        )
+
+        scores.append({
+            "start_time": start_time,
+            "end_time": end_time,
+            "score": total_score,
+            "n_cycles": n_cycles,
+            "force_cv": force_cv,
+            "signal_range": signal_range
+        })
+
+    if len(scores) == 0:
+        raise ValueError("No suitable windows found.")
+
+    best = max(scores, key=lambda x: x["score"])
+
+    best_df = df[
+        (df["time"] >= best["start_time"])
+        &
+        (df["time"] <= best["end_time"])
+    ].copy()
+
+    if filename is None:
+        base = os.path.splitext(os.path.basename(file_path))[0]
+        filename = (
+            f"{base}_best_{int(window_width_s)}s_"
+            f"{signal_col}_window.png"
+        )
+
+    output_path = os.path.join(output_folder, filename)
+
+    # -------------------------
+    # Plot formatting
+    # -------------------------
+
+    if signal_col == "voltage":
+        signal_colour = PLOT_COLOURS["voltage"]
+        signal_ylabel = "Voltage (V)"
+        signal_title = "Open-circuit voltage"
+    elif signal_col == "current":
+        signal_colour = PLOT_COLOURS["current"]
+
+        # Convert current to nA for readability
+        best_df["current_plot"] = best_df[signal_col] * 1e9
+        signal_col_to_plot = "current_plot"
+        signal_ylabel = "Current (nA)"
+        signal_title = "Short-circuit current"
+    else:
+        signal_colour = "tab:blue"
+        signal_ylabel = signal_col
+        signal_title = signal_col
+        signal_col_to_plot = signal_col
+
+    if signal_col != "current":
+        signal_col_to_plot = signal_col
+
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(9, 5),
+        sharex=True
+    )
+
+    axes[0].plot(
+        best_df["time"],
+        best_df["force"],
+        color=PLOT_COLOURS["force"],
+        linewidth=1.4
+    )
+
+    axes[0].set_ylabel("Force (N)")
+    axes[0].set_title("Force-controlled contact-separation cycles")
+    axes[0].grid(True, linestyle="--", alpha=0.4)
+
+    axes[1].plot(
+        best_df["time"],
+        best_df[signal_col_to_plot],
+        color=signal_colour,
+        linewidth=1.2
+    )
+
+    axes[1].set_xlabel("Time (s)")
+    axes[1].set_ylabel(signal_ylabel)
+    axes[1].set_title(signal_title)
+    axes[1].grid(True, linestyle="--", alpha=0.4)
+
+    fig.suptitle(
+        f"Example signal window: {os.path.basename(file_path)}",
+        fontsize=10
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+    print("\nSaved best signal window plot:")
+    print(output_path)
+
+    print("\nSelected window:")
+    print(f"Start: {best['start_time']:.2f} s")
+    print(f"End:   {best['end_time']:.2f} s")
+    print(f"Cycles detected: {best['n_cycles']}")
+    print(f"Window score: {best['score']:.3f}")
+
+    return {
+        "output_path": output_path,
+        "start_time": best["start_time"],
+        "end_time": best["end_time"],
+        "n_cycles": best["n_cycles"],
+        "score": best["score"]
+    }
 
 # def analyse_repeatability_across_repeats(
 #     folder_path,

@@ -470,6 +470,62 @@ def plot_force_voltage():
             str(e)
         )
 
+def plot_material_voc_isc_peak_rms_errorbars_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select material folder for VOC/ISC peak and RMS plots"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+        Processing_functions.plot_material_voc_isc_peak_rms_errorbars(
+            material_folder=folder_path,
+            run_material_analysis=False,
+            current_scale=1e9,
+            current_unit="nA"
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "VOC and ISC peak/RMS plots created!"
+        )
+
+    except Exception as e:
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
+        
+def plot_best_signal_window_gui():
+
+    file_path = filedialog.askopenfilename(
+        title="Select CSV file for best signal window plot",
+        filetypes=[("CSV files", "*.csv")]
+    )
+
+    if not file_path:
+        return
+
+    try:
+        Processing_functions.plot_best_signal_window(
+            file_path=file_path,
+            window_width_s=20,
+            step_s=2,
+            signal_col=None
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "Best signal window plot created!"
+        )
+
+    except Exception as e:
+        messagebox.showerror(
+            "Error",
+            str(e)
+        )
 
 # =========================
 # GUI LAYOUT
@@ -639,6 +695,14 @@ tk.Button(
     command=analyse_matched_current_force_gui
 ).grid(row=5, column=0, pady=5, sticky="ew")
 
+tk.Button(
+    individual_frame,
+    text="Plot Best Signal Window",
+    width=36,
+    height=2,
+    command=plot_best_signal_window_gui
+).grid(row=6, column=0, pady=5, sticky="ew")
+
 
 # =========================
 # RIGHT COLUMN: OVERALL MATERIAL ANALYSIS
@@ -683,5 +747,14 @@ tk.Button(
     height=2,
     command=compare_all_material_force_characterisation_gui
 ).grid(row=4, column=0, pady=5, sticky="ew")
+
+tk.Button(
+    material_frame,
+    text="Plot Material VOC/ISC Peak + RMS",
+    width=36,
+    height=2,
+    command=plot_material_voc_isc_peak_rms_errorbars_gui
+).grid(row=5, column=0, pady=5, sticky="ew")
+
 
 root.mainloop()
