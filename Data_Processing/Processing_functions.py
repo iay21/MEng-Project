@@ -18,85 +18,6 @@ contact_start_threshold = 0.5
 contact_end_threshold = 0.2
 
 
-# def load_data(file_path):
-#     """
-#     Loads old or new CSV files.
-
-#     Supported formats after metadata/header:
-#         time, force
-#         time, force, voltage
-#         time, force, voltage, current
-
-#     The current column is assumed to already be real current in amps.
-#     Rows are only dropped if time or force is missing; this prevents voltage-only
-#     or current-only files being emptied because the other channel is blank.
-#     """
-
-#     data_start = 0
-
-#     with open(file_path, "r") as f:
-#         for i, line in enumerate(f):
-#             line = line.strip()
-
-#             if not line:
-#                 continue
-
-#             if line.startswith("#"):
-#                 continue
-
-#             if "time" in line.lower():
-#                 continue
-
-#             data_start = i
-#             break
-
-#     df = pd.read_csv(
-#         file_path,
-#         sep=r"[\s,\t,]+",
-#         engine="python",
-#         skiprows=data_start,
-#         header=None
-#     )
-
-#     if df.shape[1] >= 4:
-#         df = df.iloc[:, :4]
-#         df.columns = ["time", "force", "voltage", "current"]
-
-#     elif df.shape[1] >= 3:
-#         df = df.iloc[:, :3]
-#         df.columns = ["time", "force", "voltage"]
-
-#     elif df.shape[1] >= 2:
-#         df = df.iloc[:, :2]
-#         df.columns = ["time", "force"]
-
-#     else:
-#         raise ValueError(f"Not enough columns in {file_path}")
-
-#     for col in df.columns:
-#         df[col] = pd.to_numeric(df[col], errors="coerce")
-
-#     # Only require time and force.
-#     # Do NOT drop rows just because voltage/current is blank.
-#     df = df.dropna(subset=["time", "force"]).reset_index(drop=True)
-
-#     # Remove voltage column if it is completely empty
-#     if "voltage" in df.columns and df["voltage"].isna().all():
-#         df = df.drop(columns=["voltage"])
-
-#     # Remove current column if it is completely empty
-#     if "current" in df.columns and df["current"].isna().all():
-#         df = df.drop(columns=["current"])
-
-#     # Remove any out-of-order time glitches
-#     bad_rows = df.index[
-#         df["time"].shift(-1) < df["time"]
-#     ]
-
-#     df = df.drop(bad_rows).reset_index(drop=True)
-
-#     return df
-
 def load_data(file_path):
     """
     Loads old or new CSV files.
@@ -4879,7 +4800,6 @@ def analyse_voltage_force_characterisation(material_folder):
 
     return output_excel
 
-
 def analyse_material_force_characterisation(material_folder):
     """
     Whole-material force characterisation.
@@ -4893,9 +4813,18 @@ def analyse_material_force_characterisation(material_folder):
                 Matched_Voltage/
                 Matched_Current/
 
-    This function calls the individual folder analysers, then combines their
-    summary sheets into one material-level Excel file and summary plots.
+    This function:
+        1. Calls the individual folder analysers.
+        2. Combines their SUMMARY sheets into one material-level Excel file.
+        3. Makes material-level plots using the correct voltage/current colours.
+        4. Includes the material name in each individual material plot title.
     """
+
+    import os
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    material_name = os.path.basename(os.path.normpath(material_folder))
 
     force_folder = os.path.join(
         material_folder,
@@ -4991,13 +4920,9 @@ def analyse_material_force_characterisation(material_folder):
 
             test_df = combined_df[
                 combined_df["Test"] == test_name
-            ]
+            ].copy()
 
-            safe_sheet_name = (
-                test_name
-                .replace(" ", "_")
-                .replace("/", "_")
-            )[:31]
+            safe_sheet_name = str(test_name).replace("/", "_")[:31]
 
             test_df.to_excel(
                 writer,
@@ -5005,13 +4930,25 @@ def analyse_material_force_characterisation(material_folder):
                 index=False
             )
 
+    def get_line_style(test_name):
+        """
+        Keeps signal colour consistent while still distinguishing
+        open/short circuit tests from matched-load tests.
+        """
+
+        if test_name in ["VOC", "ISC"]:
+            return "-"
+
+        return "--"
+
     def plot_combined_metric(
         signal_type,
         metric_col,
         ylabel,
         title,
         filename,
-        scale=1
+        scale=1,
+        colour=None
     ):
 
         plot_df = combined_df[
@@ -5019,7 +4956,12 @@ def analyse_material_force_characterisation(material_folder):
         ].copy()
 
         if len(plot_df) == 0:
-            return
+            print(f"No {signal_type} data found for {material_name}.")
+            return None
+
+        if metric_col not in plot_df.columns:
+            print(f"Column not found: {metric_col}")
+            return None
 
         plt.figure(figsize=(8, 6))
 
@@ -5033,12 +4975,14 @@ def analyse_material_force_characterisation(material_folder):
                 subset["Target Force (N)"],
                 subset[metric_col] * scale,
                 marker="o",
+                color=colour,
+                linestyle=get_line_style(test_name),
                 label=test_name
             )
 
         plt.xlabel("Target Force (N)")
         plt.ylabel(ylabel)
-        plt.title(title)
+        plt.title(f"{material_name}: {title}")
 
         plt.grid(
             True,
@@ -5049,12 +4993,16 @@ def analyse_material_force_characterisation(material_folder):
         plt.legend()
         plt.tight_layout()
 
+        output_path = os.path.join(force_folder, filename)
+
         plt.savefig(
-            os.path.join(force_folder, filename),
+            output_path,
             dpi=300
         )
 
         plt.close()
+
+        return output_path
 
     # =====================================================
     # VOLTAGE SUMMARY PLOTS
@@ -5065,7 +5013,8 @@ def analyse_material_force_characterisation(material_folder):
         metric_col="Mean Rectified Peak",
         ylabel="Mean rectified peak voltage (V)",
         title="Voltage Peak vs Force",
-        filename="Material_voltage_peak_vs_force.png"
+        filename="Material_voltage_peak_vs_force.png",
+        colour=PLOT_COLOURS["voltage"]
     )
 
     plot_combined_metric(
@@ -5073,7 +5022,8 @@ def analyse_material_force_characterisation(material_folder):
         metric_col="Mean RMS",
         ylabel="Mean RMS voltage (V)",
         title="Voltage RMS vs Force",
-        filename="Material_voltage_rms_vs_force.png"
+        filename="Material_voltage_rms_vs_force.png",
+        colour=PLOT_COLOURS["voltage_rms"]
     )
 
     plot_combined_metric(
@@ -5081,7 +5031,8 @@ def analyse_material_force_characterisation(material_folder):
         metric_col="STD Rectified Peak",
         ylabel="STD rectified peak voltage (V)",
         title="Voltage Peak STD vs Force",
-        filename="Material_voltage_peak_std_vs_force.png"
+        filename="Material_voltage_peak_std_vs_force.png",
+        colour=PLOT_COLOURS["voltage"]
     )
 
     plot_combined_metric(
@@ -5089,7 +5040,8 @@ def analyse_material_force_characterisation(material_folder):
         metric_col="CV Rectified Peak (%)",
         ylabel="CV rectified peak voltage (%)",
         title="Voltage Peak CV vs Force",
-        filename="Material_voltage_peak_cv_vs_force.png"
+        filename="Material_voltage_peak_cv_vs_force.png",
+        colour=PLOT_COLOURS["voltage"]
     )
 
     # =====================================================
@@ -5102,7 +5054,8 @@ def analyse_material_force_characterisation(material_folder):
         ylabel="Mean rectified peak current (µA)",
         title="Current Peak vs Force",
         filename="Material_current_peak_vs_force.png",
-        scale=1e6
+        scale=1e6,
+        colour=PLOT_COLOURS["current"]
     )
 
     plot_combined_metric(
@@ -5111,7 +5064,8 @@ def analyse_material_force_characterisation(material_folder):
         ylabel="Mean RMS current (µA)",
         title="Current RMS vs Force",
         filename="Material_current_rms_vs_force.png",
-        scale=1e6
+        scale=1e6,
+        colour=PLOT_COLOURS["current_rms"]
     )
 
     plot_combined_metric(
@@ -5120,7 +5074,8 @@ def analyse_material_force_characterisation(material_folder):
         ylabel="STD rectified peak current (µA)",
         title="Current Peak STD vs Force",
         filename="Material_current_peak_std_vs_force.png",
-        scale=1e6
+        scale=1e6,
+        colour=PLOT_COLOURS["current"]
     )
 
     plot_combined_metric(
@@ -5128,7 +5083,8 @@ def analyse_material_force_characterisation(material_folder):
         metric_col="CV Rectified Peak (%)",
         ylabel="CV rectified peak current (%)",
         title="Current Peak CV vs Force",
-        filename="Material_current_peak_cv_vs_force.png"
+        filename="Material_current_peak_cv_vs_force.png",
+        colour=PLOT_COLOURS["current"]
     )
 
     print(
@@ -5136,6 +5092,288 @@ def analyse_material_force_characterisation(material_folder):
     )
 
     return output_excel
+
+
+def compare_all_material_force_characterisation(
+    final_data_folder,
+    run_material_analysis=True,
+    voltage_test="VOC",
+    current_test="ISC",
+    current_scale=1e9,
+    current_unit="nA"
+):
+    """
+    Compare force characterisation across all materials.
+
+    Expected structure:
+
+        final_data_folder/
+            Material_1/
+                Force_Characterisation/
+                    VOC/
+                    ISC/
+                    Matched_Voltage/
+                    Matched_Current/
+
+            Material_2/
+                Force_Characterisation/
+                    VOC/
+                    ISC/
+                    Matched_Voltage/
+                    Matched_Current/
+
+    This function:
+        1. Loops through each material folder.
+        2. Optionally reruns analyse_material_force_characterisation().
+        3. Reads each MATERIAL_FORCE_CHARACTERISATION_SUMMARY.xlsx file.
+        4. Combines all materials into one Excel file.
+        5. Plots:
+            - Vpeak vs force for all materials
+            - Vrms vs force for all materials
+            - Isc peak vs force for all materials
+            - Irms vs force for all materials
+
+    All-material plots use get_compare_colour(i), so material colours are
+    consistent across all comparison plots.
+    """
+
+    import os
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    final_data_folder = os.path.abspath(final_data_folder)
+
+    material_folders = sorted([
+        f for f in os.listdir(final_data_folder)
+        if os.path.isdir(os.path.join(final_data_folder, f))
+    ])
+
+    if len(material_folders) == 0:
+        raise ValueError("No material folders found.")
+
+    combined_rows = []
+
+    for material in material_folders:
+
+        material_folder = os.path.join(
+            final_data_folder,
+            material
+        )
+
+        force_folder = os.path.join(
+            material_folder,
+            "Force_Characterisation"
+        )
+
+        summary_excel = os.path.join(
+            force_folder,
+            "MATERIAL_FORCE_CHARACTERISATION_SUMMARY.xlsx"
+        )
+
+        if run_material_analysis:
+            try:
+                summary_excel = analyse_material_force_characterisation(
+                    material_folder
+                )
+
+            except Exception as e:
+                print(f"Skipping {material}: material analysis failed.")
+                print(e)
+                continue
+
+        if not os.path.exists(summary_excel):
+            print(f"Skipping {material}: no material summary found.")
+            continue
+
+        try:
+            material_df = pd.read_excel(
+                summary_excel,
+                sheet_name="SUMMARY_ALL_TESTS"
+            )
+
+            material_df["Material"] = material
+
+            combined_rows.append(material_df)
+
+        except Exception as e:
+            print(f"Skipping {material}: could not read summary Excel.")
+            print(e)
+            continue
+
+    if len(combined_rows) == 0:
+        raise ValueError("No valid material summaries were found.")
+
+    combined_df = pd.concat(
+        combined_rows,
+        ignore_index=True
+    )
+
+    combined_df["Material"] = combined_df["Material"].astype(str).str.strip()
+    combined_df["Test"] = combined_df["Test"].astype(str).str.strip()
+
+    combined_df["Material Number"] = combined_df["Material"].apply(
+        get_material_number
+    )
+
+
+    combined_df = combined_df.sort_values(
+        ["Material", "Test", "Target Force (N)"]
+    ).reset_index(drop=True)
+
+    output_excel = os.path.join(
+        final_data_folder,
+        "ALL_MATERIAL_FORCE_CHARACTERISATION_COMPARISON.xlsx"
+    )
+
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+
+        combined_df.to_excel(
+            writer,
+            sheet_name="ALL_DATA",
+            index=False
+        )
+
+        for test_name in combined_df["Test"].dropna().unique():
+
+            test_df = combined_df[
+                combined_df["Test"] == test_name
+            ].copy()
+
+            safe_sheet_name = str(test_name).replace("/", "_")[:31]
+
+            test_df.to_excel(
+                writer,
+                sheet_name=safe_sheet_name,
+                index=False
+            )
+
+    def plot_material_comparison(
+        test_name,
+        metric_col,
+        ylabel,
+        title,
+        filename,
+        scale=1
+    ):
+
+        plot_df = combined_df[
+            combined_df["Test"] == test_name
+        ].copy()
+
+        if len(plot_df) == 0:
+            print(f"No data found for test: {test_name}")
+            return None
+
+        if metric_col not in plot_df.columns:
+            print(f"Column not found: {metric_col}")
+            return None
+
+        plt.figure(figsize=(8, 6))
+
+        for material in sort_materials_numerically(plot_df["Material"].unique()):
+
+            subset = plot_df[
+                plot_df["Material"] == material
+            ].copy()
+
+            subset = subset.sort_values("Target Force (N)")
+
+            plt.plot(
+                subset["Target Force (N)"],
+                subset[metric_col] * scale,
+                marker="o",
+                color=get_material_colour(material),
+                label=material
+            )
+
+        plt.xlabel("Target Force (N)")
+        plt.ylabel(ylabel)
+        plt.title(title)
+
+        plt.grid(
+            True,
+            linestyle="--",
+            alpha=0.4
+        )
+
+        plt.legend(title="Material")
+        plt.tight_layout()
+
+        output_path = os.path.join(
+            final_data_folder,
+            filename
+        )
+
+        plt.savefig(
+            output_path,
+            dpi=300
+        )
+
+        plt.close()
+
+        return output_path
+
+    # =====================================================
+    # VOLTAGE COMPARISON PLOTS
+    # =====================================================
+
+    vpeak_plot = plot_material_comparison(
+        test_name=voltage_test,
+        metric_col="Mean Rectified Peak",
+        ylabel="Mean rectified peak voltage, Vpeak (V)",
+        title=f"{voltage_test}: Vpeak vs Force",
+        filename="ALL_MATERIAL_Vpeak_vs_force.png"
+    )
+
+    vrms_plot = plot_material_comparison(
+        test_name=voltage_test,
+        metric_col="Mean RMS",
+        ylabel="Mean RMS voltage, Vrms (V)",
+        title=f"{voltage_test}: Vrms vs Force",
+        filename="ALL_MATERIAL_Vrms_vs_force.png"
+    )
+
+    # =====================================================
+    # CURRENT COMPARISON PLOTS
+    # =====================================================
+
+    ipeak_plot = plot_material_comparison(
+        test_name=current_test,
+        metric_col="Mean Rectified Peak",
+        ylabel=f"Mean rectified short-circuit current, Isc peak ({current_unit})",
+        title=f"{current_test}: Isc Peak vs Force",
+        filename="ALL_MATERIAL_Isc_peak_vs_force.png",
+        scale=current_scale
+    )
+
+    irms_plot = plot_material_comparison(
+        test_name=current_test,
+        metric_col="Mean RMS",
+        ylabel=f"Mean RMS short-circuit current, Irms ({current_unit})",
+        title=f"{current_test}: Irms vs Force",
+        filename="ALL_MATERIAL_Irms_vs_force.png",
+        scale=current_scale
+    )
+
+    print("\nSaved all-material force characterisation comparison:")
+    print(output_excel)
+
+    print("\nSaved plots:")
+    for plot in [vpeak_plot, vrms_plot, ipeak_plot, irms_plot]:
+        if plot is not None:
+            print(plot)
+
+    return {
+        "combined_df": combined_df,
+        "excel": output_excel,
+        "plots": {
+            "Vpeak": vpeak_plot,
+            "Vrms": vrms_plot,
+            "Isc_peak": ipeak_plot,
+            "Irms": irms_plot
+        }
+    }
+
 
 
 # def analyse_repeatability_across_repeats(
@@ -5300,6 +5538,71 @@ def analyse_material_force_characterisation(material_folder):
 
 #     return output_excel
 
+
+def get_material_number(material_name):
+    """
+    Extract leading material number from material name.
+
+    Examples:
+        '7 - 80% modal and 20% kapok' -> 7
+        '13 - 99% circ lyocell 1% elastane' -> 13
+        '0 - PDMS' -> 0
+
+    If no leading number is found, returns a large number so it appears last.
+    """
+
+    import re
+    import numpy as np
+
+    match = re.match(r"^\s*(\d+)", str(material_name))
+
+    if match:
+        return int(match.group(1))
+
+    return 9999
+
+
+def sort_materials_numerically(materials):
+    """
+    Sort material names by their leading material number.
+    """
+
+    return sorted(
+        materials,
+        key=lambda name: (
+            get_material_number(name),
+            str(name)
+        )
+    )
+
+
+def get_material_colour(material_name):
+    """
+    Fixed colour per material.
+
+    This prevents colours changing when PDMS is added/removed from a plot.
+    Edit these hex codes if you want different colours.
+    """
+
+    material_number = get_material_number(material_name)
+
+    MATERIAL_COLOURS = {
+        0:  "#7F7F7F",  # PDMS - grey
+
+        7:   "#FF4F61",  # modal/kapok 
+        8:   "#FFC618",  # PLA/hemp 
+        11: "#87CB52",  # seacell 
+        12: "#7CC6CF",  # vegetal fibre/elastane 
+        13:   "#8EBCF8",  # circ lyocell/elastane 
+        15:  "#008080",  # bamboo/seacell/elastane 
+    }
+
+
+    if material_number in MATERIAL_COLOURS:
+        return MATERIAL_COLOURS[material_number]
+
+    # fallback if a new material number is added
+    return "#333333"
 
 
 def analyse_force_characterisation_folder(

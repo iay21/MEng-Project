@@ -390,6 +390,33 @@ def analyse_material_force_characterisation_gui():
         messagebox.showerror("Error", str(e))
 
 
+def compare_all_material_force_characterisation_gui():
+
+    folder_path = filedialog.askdirectory(
+        title="Select final data folder containing all material folders"
+    )
+
+    if not folder_path:
+        return
+
+    try:
+        Processing_functions.compare_all_material_force_characterisation(
+            final_data_folder=folder_path,
+            run_material_analysis=True,
+            voltage_test="VOC",
+            current_test="ISC",
+            current_scale=1e9,
+            current_unit="nA"
+        )
+
+        messagebox.showinfo(
+            "Success",
+            "All-material force characterisation comparison complete!"
+        )
+
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
 def analyse_voltage_force_characterisation_gui():
 
     folder_path = filedialog.askdirectory(
@@ -648,5 +675,13 @@ tk.Button(
     height=2,
     command=analyse_voltage_force_characterisation_gui
 ).grid(row=3, column=0, pady=5, sticky="ew")
+
+tk.Button(
+    material_frame,
+    text="Compare All Materials Force Characterisation",
+    width=36,
+    height=2,
+    command=compare_all_material_force_characterisation_gui
+).grid(row=4, column=0, pady=5, sticky="ew")
 
 root.mainloop()
